@@ -28,7 +28,9 @@ against the `.sha256` file:
 
     certutil -hashfile sf-log-collector-2.0.0.zip SHA256
 
-Unpack it anywhere. Keep `Collect-StarfieldTestLogs.cmd` and `Collect-StarfieldTestLogs.ps1` in the same folder.
+(In PowerShell, `(Get-FileHash sf-log-collector-2.0.0.zip).Hash` prints the same hash in capitals; compare without
+case.) Unpack it anywhere: everything is inside one folder, `sf-log-collector-2.0.0\`, and every command below runs
+from there. Keep `Collect-StarfieldTestLogs.cmd` and `Collect-StarfieldTestLogs.ps1` in the same folder.
 
 ## 4. Prove the install works
 
@@ -37,13 +39,17 @@ The bundled test builds a fake Starfield setup in the temp folder and needs no g
     powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Collector.ps1
 
 It ends with `<N> passed, 0 failed` and exit code 0 (N is 141 on 2.0.0, a little lower if a test prints `skip`;
-what matters is `0 failed`). On a player's PC, a dry run is the quick check (it writes a
-zip but doesn't move the "last run" marker):
+what matters is `0 failed`). The test works in a new `%TEMP%\sflc-test-<random>` folder and deletes it at the end;
+it writes nothing else. On a player's PC, a dry run is the quick check (it writes a zip but doesn't move the
+"last run" marker):
 
     powershell -NoProfile -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -NoPrompt -DryRun
 
-It prints `Done.` and the zip's path, and exits with code 0. Warnings (for example "No Papyrus.0.log found") are
-normal on a PC where the game hasn't logged yet.
+It prints `Done.` and the zip's path, and exits with code 0. Warnings are normal when the game hasn't logged
+anything yet: "No Papyrus.0.log found" (Papyrus logging is off), and "Documents\My Games\Starfield not found"
+(the game was never started by this Windows user, for example when you run it from another account than the
+player's: run it as the player). "Starfield is still running" is only a warning with `-NoPrompt`; the collector
+goes on.
 
 ## 5. Common tasks
 
@@ -86,13 +92,16 @@ the options.
   `manifest.json` (versions, counts, warnings, skipped files, every file's SHA-256, a listing of Data plugins and
   SFSE DLLs by name), `collector-log.txt`, and the folders `docs\`, `appdata\`, `game\`, `mo2\`, `vortex\`,
   `downloads\`, `screenshots\`, `saves\`, `events.txt`. The README's table maps each to its source.
-- `Documents\StarfieldLogs\.last-run-<Windows user>`: the time of the last run (not written with `-DryRun`).
+- `.last-run-<Windows user>` in the same folder as the zip (`Documents\StarfieldLogs`, or the `-OutDir` folder): the
+  time of the last run (not written with `-DryRun`). Each output folder has its own marker, so a different
+  `-OutDir` starts again with the 12-hour window.
 - With `-LogFile <file>`: the troubleshooting log is appended to that file.
 
 ## 8. Exit codes
 
 - 0: the zip was made. Warnings are printed and listed in `manifest.json`.
-- 1: the player stopped it because Starfield was running (nothing collected).
+- 1: Starfield was running and the player answered "no" to "Collect anyway?" (nothing collected). With
+  `-NoPrompt` there is no question: the run warns and goes on, so this code never happens.
 - 2: an error stopped it. The message names the problem; nothing was zipped. Rerun with `-Verbose -LogFile`.
 
 ## 9. Log location

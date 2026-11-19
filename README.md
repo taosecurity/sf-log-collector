@@ -132,8 +132,9 @@ powershell -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -Verbos
 | `Could not copy <file>` | another program holds it, or you're running as another Windows user: run it as the user who plays |
 | `Crash log found!` | nothing to fix here: the crash log is in the zip |
 
-**Exit codes:** 0 = zip made (warnings are in the manifest), 1 = you stopped it because the game was running,
-2 = an error stopped it (the message names it; nothing was zipped).
+**Exit codes:** 0 = zip made (warnings are in the manifest), 1 = the game was running and you answered "no" to
+"Collect anyway?" (with `-NoPrompt` it only warns and goes on), 2 = an error stopped it (the message names it;
+nothing was zipped).
 
 ## For mod authors: reading a package
 
