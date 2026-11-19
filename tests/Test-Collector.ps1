@@ -358,6 +358,9 @@ try {
     Assert ((Read-MO2Ini $iniP)['settings/profiles_directory'] -ceq 'D:/A') '[Settings] wins over [General] settings\key, as in Qt'
     $iniS = New-File 'IniSort\ModOrganizer.ini' "[Settings/Sub]`r`nx=1`r`n[Settings]`r`nsub\x=2`r`n"
     Assert ((Read-MO2Ini $iniS)['settings/sub/x'] -ceq '1') 'sections apply in sorted name order (settings/ before settings/sub/), as in Qt'
+    $iniKeys = New-File 'IniKeysName\ModOrganizer.ini' "[General]`r`nkeys=k`r`nselected_profile=P`r`n"
+    $vk = Read-MO2Ini $iniKeys
+    Assert ($vk['selected_profile'] -ceq 'P' -and $vk['keys'] -ceq 'k') 'a key named "keys" does not break the merge'
 
     # ---------------- 5e: MO2 folder at a drive root (\\ in the INI) is not taken for a UNC path
     Write-Host ''

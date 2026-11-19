@@ -528,7 +528,8 @@ function Read-MO2Ini([string]$Path) {
     $names = [string[]]@($bySection.Keys)
     [Array]::Sort($names, [StringComparer]::Ordinal)
     $vals = @{}
-    foreach ($s in $names) { foreach ($key in $bySection[$s].Keys) { $vals[$key] = $bySection[$s][$key] } }
+    # get_Keys(), not .Keys: a [General] entry named "keys" would hide the .Keys property.
+    foreach ($s in $names) { foreach ($key in $bySection[$s].get_Keys()) { $vals[$key] = $bySection[$s][$key] } }
     return $vals
 }
 
