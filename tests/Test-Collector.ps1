@@ -174,7 +174,10 @@ try {
     # ---------------- 5: -GamePath on a drive that doesn't exist only warns
     Write-Host ''
     Write-Host 'Test 5: -GamePath on a missing drive'
-    $free = @([char[]]([int][char]'G'..[int][char]'Z') | Where-Object { -not (Test-Path "${_}:\") })
+    # A letter PowerShell has no drive for at all (a disconnected network drive still has one).
+    $known = @([System.IO.DriveInfo]::GetDrives() | ForEach-Object { $_.Name.Substring(0, 1).ToUpperInvariant() })
+    $free = @([char[]]([int][char]'G'..[int][char]'Z') | ForEach-Object { [string]$_ } |
+              Where-Object { -not (Get-PSDrive -Name $_ -ErrorAction SilentlyContinue) -and ($known -notcontains $_) })
     if ($free.Count -eq 0) {
         Write-Host '  skip (every drive letter from G to Z is in use)'
     } else {
@@ -208,8 +211,35 @@ try {
         '-DownloadsDir', (Join-Path $Root 'Downloads'), '-SavesDir', (Join-Path $Root 'Saves'), '-GamePath', (Join-Path $Root 'Game'),
         '-ScreenshotDir', ((Join-Path $Root 'ShotsA') + ';' + (Join-Path $Root 'ShotsB')), '-OutDir', $out5c)
     $r = Invoke-Collector $args5c
+    Assert ($r.code -eq 0) "exit code 0 (got $($r.code))"
     $z = Open-Zip $out5c
     Assert (@($z.names | Where-Object { $_ -match '^screenshots/same(-2)?\.png$' }).Count -eq 2) 'both screenshots kept'
+    $texts = @('same.png', 'same-2.png' | ForEach-Object { Get-Content -LiteralPath (Join-Path $z.dir "screenshots\$_") -Raw -ErrorAction SilentlyContinue }) | Sort-Object
+    Assert (($texts -join ',') -eq 'one,two') "the two screenshots are the two files ($($texts -join ','))"
+
+    # ---------------- 5d: the user folder is hidden at the end of a sentence too
+    Write-Host ''
+    Write-Host 'Test 5d: user folder at the end of a warning'
+    $out5d = Join-Path $Root 'out5d'
+    $prof5 = $env:USERPROFILE.TrimEnd('\')
+    $r = Invoke-Collector @('-NoPrompt', '-Hours', '1', '-MyGamesDir', (Join-Path $Root 'MyGames'), '-PluginsTxtDir', (Join-Path $Root 'LocalApp\Starfield'),
+        '-DownloadsDir', (Join-Path $Root 'Downloads'), '-ScreenshotDir', (Join-Path $Root 'Shots'), '-GamePath', (Join-Path $Root 'Game'),
+        '-SavesDir', $prof5, '-IncludeSaves', '-OutDir', $out5d)
+    Assert ($r.code -eq 0) "exit code 0 (got $($r.code))"
+    $z = Open-Zip $out5d
+    Assert (@($z.manifest.warnings | Where-Object { $_ -match 'No save files found in %USERPROFILE%\.' }).Count -eq 1) 'warning ends with %USERPROFILE%.'
+    Assert (-not ($z.raw.ToLowerInvariant().Contains(($prof5 -replace '\\', '\\').ToLowerInvariant()))) 'manifest hides the user folder'
+    Assert (-not ($z.raw -match [regex]::Escape('.last-run-' + $env:USERNAME))) 'manifest hides the user name in the marker name'
+
+    # ---------------- 5e: MO2 folder at a drive root (\\ in the INI) is not taken for a UNC path
+    Write-Host ''
+    Write-Host 'Test 5e: MO2 profiles folder at the drive root'
+    New-File 'MO2root\ModOrganizer.ini' "[General]`r`nselected_profile=@ByteArray(Test)`r`n[Settings]`r`nprofiles_directory=\\sflc-no-such-root`r`n" | Out-Null
+    $out5e = Join-Path $Root 'out5e'
+    $r = Invoke-Collector ($common + @('-GamePath', (Join-Path $Root 'Game'), '-MO2Path', (Join-Path $Root 'MO2root'), '-OutDir', $out5e))
+    Assert ($r.code -eq 0) "exit code 0 (got $($r.code))"
+    $z = Open-Zip $out5e
+    Assert (@($z.manifest.warnings | Where-Object { $_ -match 'MO2 profile folder not found: [A-Z]:\\sflc-no-such-root\\Test' }).Count -eq 1) 'drive-root profiles folder read as a local path'
 
     # ---------------- 6: the launcher passes the exit code on
     Write-Host ''

@@ -103,11 +103,16 @@ $script:Since = $null
 
 # Hide the Windows user folder in what we write, so a shared zip doesn't carry it in every path.
 $script:ProfileRx = $null
-# The lookahead stops C:\Users\a from matching inside C:\Users\ab.
-if ($env:USERPROFILE) { $script:ProfileRx = '(?i)' + [regex]::Escape($env:USERPROFILE.TrimEnd('\')) + '(?=[\\/"'' ]|$)' }
+# The lookahead stops C:\Users\a from matching inside C:\Users\ab or C:\Users\a.b, but still matches
+# before a backslash, punctuation, a line break or the end of the text.
+if ($env:USERPROFILE) { $script:ProfileRx = '(?i)' + [regex]::Escape($env:USERPROFILE.TrimEnd('\')) + '(?!\.?[A-Za-z0-9_-])' }
+# The marker file carries the Windows user name: .last-run-<user>.
+$script:MarkerRx = $null
+if ($env:USERNAME) { $script:MarkerRx = '(?i)\.last-run-' + [regex]::Escape($env:USERNAME) + '(?![A-Za-z0-9_-])' }
 function Hide-Path([string]$Text) {
     if ($null -eq $Text) { return $null }
-    if ($script:ProfileRx) { return ($Text -replace $script:ProfileRx, '%USERPROFILE%') }
+    if ($script:ProfileRx) { $Text = $Text -replace $script:ProfileRx, '%USERPROFILE%' }
+    if ($script:MarkerRx) { $Text = $Text -replace $script:MarkerRx, '.last-run-%USERNAME%' }
     return $Text
 }
 
@@ -287,13 +292,17 @@ function Get-DefaultScreenshotDirs([string]$MyGames) {
 
 # Reads the few ModOrganizer.ini settings we need. MO2 writes @ByteArray(...) around some values.
 function Read-MO2Ini([string]$Path) {
+    # Keys are stored as "section\key" (settings\profiles_directory) and, for [General], also as the bare key.
     $vals = @{}
+    $section = ''
     foreach ($line in Get-Content -LiteralPath $Path) {
+        if ($line -match '^\s*\[([^\]]+)\]\s*$') { $section = $Matches[1].Trim().ToLowerInvariant(); continue }
         if ($line -match '^\s*([A-Za-z_\\]+)\s*=\s*(.*)$') {
             $k = $Matches[1].ToLowerInvariant()
             $v = $Matches[2].Trim()
             if ($v -match '^@ByteArray\((.*)\)$') { $v = $Matches[1] }
-            $vals[$k] = $v
+            if ($section) { $vals["$section\$k"] = $v }
+            if (-not $section -or $section -eq 'general') { $vals[$k] = $v }
         }
     }
     return $vals
@@ -302,9 +311,11 @@ function Read-MO2Ini([string]$Path) {
 function Resolve-MO2Dir([string]$Base, [string]$Value, [string]$Default) {
     if (-not $Value) { return (Join-Path $Base $Default) }
     # The INI doubles backslashes; undo that but keep a UNC path's leading \\.
-    $v = $Value -replace '/', '\'
-    if ($v.StartsWith('\\')) { $v = '\\' + ($v.TrimStart('\') -replace '\\\\', '\') }
-    else { $v = $v -replace '\\\\', '\' }
+    # A UNC path is \\\\server (doubled) or //server in the INI; a doubled \\ alone is the drive root.
+    $isUnc = $Value.StartsWith('\\\\') -or $Value.StartsWith('//')
+    $v = ($Value -replace '/', '\').TrimStart('\') -replace '\\\\', '\'
+    if ($isUnc) { $v = '\\' + $v }
+    elseif ($Value.StartsWith('\') -or $Value.StartsWith('/')) { $v = '\' + $v }
     $v = $v -replace '(?i)%BASE_DIR%', $Base
     if (-not [System.IO.Path]::IsPathRooted($v)) { $v = Join-Path $Base $v }
     return [System.IO.Path]::GetFullPath($v)
@@ -326,7 +337,13 @@ try {
         # "not found" warning names it instead of an error stopping the run.
         try { return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($P) }
         catch {
-            Add-Warning "Path not found: $P ($($_.Exception.Message)). Check the drive letter."
+            $why = $_.Exception
+            while ($why.InnerException) { $why = $why.InnerException }
+            if ($why -is [System.Management.Automation.DriveNotFoundException]) {
+                Add-Warning "Path not found: $P (no drive $($why.ItemName):). Check the drive letter."
+            } else {
+                Add-Warning "Path not usable: $P ($($why.Message))."
+            }
             try { return [System.IO.Path]::GetFullPath($P) } catch { return $P }
         }
     }
@@ -392,15 +409,20 @@ try {
         if (-not (Test-Path -LiteralPath $mo2Ini)) {
             Add-Warning "No ModOrganizer.ini in -MO2Path $MO2Path; MO2 files skipped. Pass the MO2 instance folder (Settings > Paths shows it)."
         } else {
-            $ini = Read-MO2Ini $mo2Ini
-            $base = Resolve-MO2Dir $MO2Path $ini['settings\base_directory'] '.'
-            $profilesDir = Resolve-MO2Dir $base $ini['settings\profiles_directory'] 'profiles'
-            $overwriteDir = Resolve-MO2Dir $base $ini['settings\overwrite_directory'] 'overwrite'
-            if (-not $MO2Profile) { $MO2Profile = $ini['selected_profile'] }
-            if (-not $MO2Profile) { $MO2Profile = 'Default' }
-            $mo2 = [ordered]@{ instance = (Hide-Path $MO2Path); profile = $MO2Profile; profileDir = (Join-Path $profilesDir $MO2Profile); overwrite = $overwriteDir }
-            Write-Log "MO2: profile '$MO2Profile' in $profilesDir, overwrite $overwriteDir"
-            if (-not (Test-Path -LiteralPath $mo2.profileDir)) { Add-Warning "MO2 profile folder not found: $($mo2.profileDir). Check -MO2Profile." }
+            try {
+                $ini = Read-MO2Ini $mo2Ini
+                $base = Resolve-MO2Dir $MO2Path $ini['settings\base_directory'] '.'
+                $profilesDir = Resolve-MO2Dir $base $ini['settings\profiles_directory'] 'profiles'
+                $overwriteDir = Resolve-MO2Dir $base $ini['settings\overwrite_directory'] 'overwrite'
+                if (-not $MO2Profile) { $MO2Profile = $ini['selected_profile'] }
+                if (-not $MO2Profile) { $MO2Profile = 'Default' }
+                $mo2 = [ordered]@{ instance = (Hide-Path $MO2Path); profile = $MO2Profile; profileDir = (Join-Path $profilesDir $MO2Profile); overwrite = $overwriteDir }
+                Write-Log "MO2: profile '$MO2Profile' in $profilesDir, overwrite $overwriteDir"
+                if (-not (Test-Path -LiteralPath $mo2.profileDir)) { Add-Warning "MO2 profile folder not found: $($mo2.profileDir). Check -MO2Profile." }
+            } catch {
+                $mo2 = $null
+                Add-Warning "Could not read the MO2 folders from $mo2Ini ($($_.Exception.Message)); MO2 files skipped."
+            }
         }
     } else {
         $globalMo2 = Join-Path $env:LOCALAPPDATA 'ModOrganizer\Starfield\ModOrganizer.ini'
@@ -417,11 +439,17 @@ try {
     # A damaged or empty marker falls back to 12 hours instead of stopping the run.
     $parsed = [datetime]::MinValue
     $markerOk = $false
+    $markerBad = $false
     if ($Hours -le 0 -and (Test-Path -LiteralPath $Marker)) {
-        $markerText = ([string](Get-Content -LiteralPath $Marker -Raw)).Trim()
-        $markerOk = [datetime]::TryParse($markerText, [Globalization.CultureInfo]::InvariantCulture,
-                                         [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)
-        if (-not $markerOk) { Add-Warning "The last-run marker $Marker could not be read; using the last 12 hours." }
+        try {
+            $markerText = ([string](Get-Content -LiteralPath $Marker -Raw)).Trim()
+            $markerOk = [datetime]::TryParse($markerText, [Globalization.CultureInfo]::InvariantCulture,
+                                             [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)
+        } catch { $markerOk = $false }
+        if (-not $markerOk) {
+            $markerBad = $true
+            Add-Warning "The last-run marker $Marker could not be read; using the last 12 hours."
+        }
     }
     if ($Hours -gt 0) {
         $script:Since = $Now.AddHours(-$Hours)
@@ -431,7 +459,7 @@ try {
         $WindowText = 'since last run'
     } else {
         $script:Since = $Now.AddHours(-12)
-        $WindowText = 'last 12 hours (first run)'
+        $WindowText = $(if ($markerBad) { 'last 12 hours (marker unreadable)' } else { 'last 12 hours (first run)' })
     }
     Write-Host "Collecting files changed $WindowText ($($script:Since.ToString('yyyy-MM-dd HH:mm')))"
     Write-Log "window: $WindowText, since $($script:Since.ToString('s')); marker $Marker"
