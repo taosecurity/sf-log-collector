@@ -321,7 +321,7 @@ try {
     Assert ((ConvertFrom-QtIniValue '@Point(D:/x)') -ceq '@Point(D:/x)') '@Point with the wrong argument count stays text, as in Qt'
     Assert ((ConvertFrom-QtIniValue '@Rect(1 2 3 4)') -ceq '') '@Rect with 4 arguments is not a string'
     # Read-MO2Ini joins a line that ends in a backslash with the next one, as Qt does.
-    foreach ($name in 'Split-QtIniLines', 'Read-MO2Ini') {
+    foreach ($name in 'Split-QtIniLines', 'ConvertFrom-QtIniKey', 'Read-MO2Ini') {
         $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
         . ([scriptblock]::Create($fn.Extent.Text))
     }
@@ -336,14 +336,24 @@ try {
                "  plugin_directory = D:/p  `r`n"                                  # spaces around key and value
     $iniC = New-File 'IniCont\ModOrganizer.ini' $iniText
     $vals = Read-MO2Ini $iniC
-    Assert ($vals['settings\profiles_directory'] -ceq 'D:/Mods/xmod_directory=E:/m') "continued line joined as Qt reads it ($($vals['settings\profiles_directory']))"
-    Assert (-not $vals.ContainsKey('settings\mod_directory')) 'the continued line is not a key of its own'
-    Assert ($vals['settings\overwrite_directory'] -ceq 'D:/ow') "a ';' comment line ending in a backslash doesn't swallow the next line"
-    Assert ($vals['settings\download_directory'] -ceq 'D:/dl') "an inline ';' ends the value ($($vals['settings\download_directory']))"
-    Assert (-not $vals.ContainsKey('settings\cache_directory')) "'#' is not a comment in Qt: the line continues"
-    Assert ($vals['settings\base_directory'] -ceq "D:/a`r`nb") "a quoted value runs over the line break ($($vals['settings\base_directory'] -replace "`r`n", '<CRLF>'))"
-    Assert ($vals['settings\plugin_directory'] -ceq 'D:/p') 'spaces around key and value trimmed'
+    Assert ($vals['settings/profiles_directory'] -ceq 'D:/Mods/xmod_directory=E:/m') "continued line joined as Qt reads it ($($vals['settings/profiles_directory']))"
+    Assert (-not $vals.ContainsKey('settings/mod_directory')) 'the continued line is not a key of its own'
+    Assert ($vals['settings/overwrite_directory'] -ceq 'D:/ow') "a ';' comment line ending in a backslash doesn't swallow the next line"
+    Assert ($vals['settings/download_directory'] -ceq 'D:/dl') "an inline ';' ends the value ($($vals['settings/download_directory']))"
+    Assert (-not $vals.ContainsKey('settings/cache_directory')) "'#' is not a comment in Qt: the line continues"
+    Assert ($vals['settings/base_directory'] -ceq "D:/a`r`nb") "a quoted value runs over the line break ($($vals['settings/base_directory'] -replace "`r`n", '<CRLF>'))"
+    Assert ($vals['settings/plugin_directory'] -ceq 'D:/p') 'spaces around key and value trimmed'
     Assert ($vals['selected_profile'] -ceq 'Test') '[General] key read bare'
+    Assert ((ConvertFrom-QtIniValue '@Point(1)2)') -ceq '') "@Point splitArgs as Qt: ')' adds the item without clearing it"
+    Assert ((ConvertFrom-QtIniKey 'a\b%41%U0042%zz%') -ceq 'a/bAB%zz%') 'keys: \ to /, %XX and %UXXXX decoded, bad % kept'
+    $iniK = New-File 'IniKeys\ModOrganizer.ini' ("[General]`r`nsettings\overwrite_directory=D:/o`r`n[Sett%69ngs]`r`nprofiles_directory=D:/p`r`n" +
+                                                 "[%General]`r`nx=1`r`n")
+    # Read while another program holds the file open for writing, as a running MO2 may.
+    $hold = [System.IO.File]::Open($iniK, 'Open', 'ReadWrite', 'ReadWrite')
+    try { $vals = Read-MO2Ini $iniK } finally { $hold.Dispose() }
+    Assert ($vals['settings/overwrite_directory'] -ceq 'D:/o') '[General] settings\key is the same key as [Settings] key'
+    Assert ($vals['settings/profiles_directory'] -ceq 'D:/p') 'section names are unescaped (%69)'
+    Assert ($vals['general/x'] -ceq '1') '[%General] is a real section named General'
 
     # ---------------- 5e: MO2 folder at a drive root (\\ in the INI) is not taken for a UNC path
     Write-Host ''

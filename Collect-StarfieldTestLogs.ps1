@@ -396,8 +396,14 @@ function ConvertFrom-QtIniValue([string]$Raw) {
     # @Variant/@DateTime hold Qt's binary data stream, which this tool doesn't decode: read as "".
     foreach ($typed in @(@('@Rect(', 4), @('@Size(', 2), @('@Point(', 2))) {
         if ($out.StartsWith($typed[0], $ord) -and $out.EndsWith(')', $ord)) {
-            # Qt's splitArgs splits on each single space and keeps empty items.
-            $args2 = $out.Substring($typed[0].Length, $out.Length - $typed[0].Length - 1).Split(' ')
+            # Qt's splitArgs: a space ends an item (empty items kept); a ')' adds the item without clearing it.
+            $args2 = New-Object System.Collections.Generic.List[string]
+            $item = ''
+            foreach ($ch in $out.Substring($typed[0].Length).ToCharArray()) {
+                if ($ch -eq ')') { $args2.Add($item) }
+                elseif ($ch -eq ' ') { $args2.Add($item); $item = '' }
+                else { $item += $ch }
+            }
             if ($args2.Count -eq $typed[1]) { return '' }
             return $out
         }
@@ -464,25 +470,52 @@ function Split-QtIniLines([string]$Data) {
     return $out
 }
 
-# Reads ModOrganizer.ini. Keys are stored as "section\key" (settings\profiles_directory) and, for
-# [General], also as the bare key (selected_profile).
+# Qt 5.15's QSettingsPrivate::iniUnescapedKey: '\' becomes '/', %XX and %UXXXX are hex characters
+# (a '%' that can't be read stays as is).
+function ConvertFrom-QtIniKey([string]$Key) {
+    $sb = New-Object System.Text.StringBuilder
+    $i = 0; $to = $Key.Length
+    while ($i -lt $to) {
+        $ch = $Key[$i]
+        if ($ch -eq '\') { [void]$sb.Append('/'); $i++; continue }
+        if ($ch -ne '%' -or $i -eq $to - 1) { [void]$sb.Append($ch); $i++; continue }
+        $num = 2; $first = $i + 1
+        if ($Key[$i + 1] -ceq 'U') { $first++; $num = 4 }
+        $code = 0
+        if ($first + $num -gt $to -or -not [int]::TryParse($Key.Substring($first, $num), [Globalization.NumberStyles]::AllowHexSpecifier, [Globalization.CultureInfo]::InvariantCulture, [ref]$code)) {
+            [void]$sb.Append('%'); $i++; continue
+        }
+        [void]$sb.Append([char]$code); $i = $first + $num
+    }
+    return $sb.ToString()
+}
+
+# Reads ModOrganizer.ini as Qt 5.15 does (readIniFile, readIniSection). Keys come back lowercased (Qt's
+# INI keys ignore case on Windows) with '/' between section and key: "settings/profiles_directory";
+# keys in [General] have no section: "selected_profile".
 function Read-MO2Ini([string]$Path) {
     $vals = @{}
     $section = ''
-    # MO2 (Qt) writes UTF-8; ReadAllText drops a byte-order mark as Qt does.
-    $data = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+    # FileShare.ReadWrite, so a running MO2 that holds the file open doesn't stop the read. UTF-8, and
+    # only a UTF-8 byte-order mark is dropped, as in Qt.
+    $fs = [System.IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
+    try { $ms = New-Object System.IO.MemoryStream; $fs.CopyTo($ms); $bytes = $ms.ToArray() } finally { $fs.Dispose() }
+    $skip = $(if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { 3 } else { 0 })
+    $data = (New-Object System.Text.UTF8Encoding($false)).GetString($bytes, $skip, $bytes.Length - $skip)
+    $asciiSpace = [char[]]@(' ', "`t", "`n", [char]11, [char]12, "`r")
     foreach ($line in Split-QtIniLines $data) {
         $t = $line.text
         if ($t.StartsWith('[')) {
             $close = $t.IndexOf(']')
-            $name = $(if ($close -ge 0) { $t.Substring(1, $close - 1) } else { $t.Substring(1) }).Trim()
-            $section = $(if ($name -ieq 'general') { '' } else { $name.ToLowerInvariant() })
+            $name = $(if ($close -ge 0) { $t.Substring(1, $close - 1) } else { $t.Substring(1) }).Trim($asciiSpace)
+            if ($name -ieq 'general') { $section = '' }
+            elseif ($name -ieq '%general') { $section = $name.Substring(1).ToLowerInvariant() + '/' }
+            else { $section = (ConvertFrom-QtIniKey $name).ToLowerInvariant() + '/' }
             continue
         }
         if ($line.eq -lt 0) { continue }
-        $k = $t.Substring(0, $line.eq).Trim().ToLowerInvariant()
-        $v = ConvertFrom-QtIniValue $t.Substring($line.eq + 1)
-        if ($section) { $vals["$section\$k"] = $v } else { $vals[$k] = $v }
+        $k = (ConvertFrom-QtIniKey $t.Substring(0, $line.eq).TrimEnd(' ', "`t")).ToLowerInvariant()
+        $vals[$section + $k] = ConvertFrom-QtIniValue $t.Substring($line.eq + 1)
     }
     return $vals
 }
@@ -602,9 +635,9 @@ try {
         } else {
             try {
                 $ini = Read-MO2Ini $mo2Ini
-                $base = Resolve-MO2Dir $MO2Path $ini['settings\base_directory'] '.'
-                $profilesDir = Resolve-MO2Dir $base $ini['settings\profiles_directory'] 'profiles'
-                $overwriteDir = Resolve-MO2Dir $base $ini['settings\overwrite_directory'] 'overwrite'
+                $base = Resolve-MO2Dir $MO2Path $ini['settings/base_directory'] '.'
+                $profilesDir = Resolve-MO2Dir $base $ini['settings/profiles_directory'] 'profiles'
+                $overwriteDir = Resolve-MO2Dir $base $ini['settings/overwrite_directory'] 'overwrite'
                 if (-not $MO2Profile) { $MO2Profile = $ini['selected_profile'] }
                 if (-not $MO2Profile) { $MO2Profile = 'Default' }
                 $mo2 = [ordered]@{ instance = (Hide-Path $MO2Path); profile = $MO2Profile; profileDir = [System.IO.Path]::Combine($profilesDir, $MO2Profile); overwrite = $overwriteDir }
