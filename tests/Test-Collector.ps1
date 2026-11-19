@@ -8,17 +8,25 @@
     screenshots, runs the collector with -NoPrompt, and checks the zip. It needs no game.
     Exit code 0 = all passed, 1 = a check failed.
 .PARAMETER Shell
-    The PowerShell to run the collector with: powershell (5.1) or pwsh (7). Default: the current one.
+    The PowerShell to run the collector with: powershell (5.1), pwsh (7), or the path of a PowerShell
+    .exe (a relative path is taken from the current folder). Default: the current one.
 #>
 param([string]$Shell = '')
 
 $ErrorActionPreference = 'Stop'
 if (-not $Shell) { $Shell = (Get-Process -Id $PID).Path }
-# Resolve the name once, so the log shows the exact program that ran the collector. A path is kept as
-# given (Get-Command would read [ ] in it as wildcards); a bare name is looked up on PATH.
-if (-not (Test-Path -LiteralPath $Shell -PathType Leaf)) {
+# Resolve the name once, so the log shows the exact program that runs the collector. A name with a
+# slash or backslash is a path (made full, and it must be an .exe); a bare name is looked up on PATH,
+# as & does.
+if ($Shell -match '[\\/]') {
+    # Combine keeps a rooted path as it is and puts a relative one under the current folder.
+    $Shell = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine((Get-Location).ProviderPath, $Shell))
+    if (-not (Test-Path -LiteralPath $Shell -PathType Leaf) -or [System.IO.Path]::GetExtension($Shell) -ne '.exe') {
+        Write-Host "Shell '$Shell' is not an .exe file. Pass -Shell powershell, pwsh or the path of one." -ForegroundColor Red; exit 1
+    }
+} else {
     $found = @(Get-Command -Name $Shell -CommandType Application -ErrorAction SilentlyContinue)
-    if ($found.Count -eq 0) { Write-Host "Shell '$Shell' not found. Pass -Shell powershell, pwsh or a full path." -ForegroundColor Red; exit 1 }
+    if ($found.Count -eq 0) { Write-Host "Shell '$Shell' not found on PATH. Pass -Shell powershell, pwsh or the path of one." -ForegroundColor Red; exit 1 }
     $Shell = $found[0].Source
 }
 $ShellEdition = (@(& $Shell -NoProfile -Command '$PSVersionTable.PSEdition; $PSVersionTable.PSVersion.ToString()') -join ' ').Trim()
