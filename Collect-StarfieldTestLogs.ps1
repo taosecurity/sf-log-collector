@@ -103,7 +103,8 @@ $script:Since = $null
 
 # Hide the Windows user folder in what we write, so a shared zip doesn't carry it in every path.
 $script:ProfileRx = $null
-if ($env:USERPROFILE) { $script:ProfileRx = '(?i)' + [regex]::Escape($env:USERPROFILE.TrimEnd('\')) }
+# The lookahead stops C:\Users\a from matching inside C:\Users\ab.
+if ($env:USERPROFILE) { $script:ProfileRx = '(?i)' + [regex]::Escape($env:USERPROFILE.TrimEnd('\')) + '(?=[\\/"'' ]|$)' }
 function Hide-Path([string]$Text) {
     if ($null -eq $Text) { return $null }
     if ($script:ProfileRx) { return ($Text -replace $script:ProfileRx, '%USERPROFILE%') }
@@ -300,7 +301,10 @@ function Read-MO2Ini([string]$Path) {
 
 function Resolve-MO2Dir([string]$Base, [string]$Value, [string]$Default) {
     if (-not $Value) { return (Join-Path $Base $Default) }
-    $v = $Value -replace '/', '\' -replace '\\\\', '\'
+    # The INI doubles backslashes; undo that but keep a UNC path's leading \\.
+    $v = $Value -replace '/', '\'
+    if ($v.StartsWith('\\')) { $v = '\\' + ($v.TrimStart('\') -replace '\\\\', '\') }
+    else { $v = $v -replace '\\\\', '\' }
     $v = $v -replace '(?i)%BASE_DIR%', $Base
     if (-not [System.IO.Path]::IsPathRooted($v)) { $v = Join-Path $Base $v }
     return [System.IO.Path]::GetFullPath($v)
@@ -321,7 +325,10 @@ try {
         # A drive that doesn't exist (E:\ on a PC without E:) is left as typed, so the usual
         # "not found" warning names it instead of an error stopping the run.
         try { return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($P) }
-        catch { Write-Log "cannot resolve path ${P}: $($_.Exception.Message)"; return $P }
+        catch {
+            Add-Warning "Path not found: $P ($($_.Exception.Message)). Check the drive letter."
+            try { return [System.IO.Path]::GetFullPath($P) } catch { return $P }
+        }
     }
     $SavesDir = Resolve-Full $SavesDir; $GamePath = Resolve-Full $GamePath; $MO2Path = Resolve-Full $MO2Path
     $VortexExportDir = Resolve-Full $VortexExportDir; $DownloadsDir = Resolve-Full $DownloadsDir
@@ -407,11 +414,20 @@ try {
     if (-not (Test-Path -LiteralPath $OutDir)) { [void](New-Item -ItemType Directory -Path $OutDir -Force) }
     $Marker = Join-Path $OutDir ('.last-run-' + $env:USERNAME)
     $Now = Get-Date
+    # A damaged or empty marker falls back to 12 hours instead of stopping the run.
+    $parsed = [datetime]::MinValue
+    $markerOk = $false
+    if ($Hours -le 0 -and (Test-Path -LiteralPath $Marker)) {
+        $markerText = ([string](Get-Content -LiteralPath $Marker -Raw)).Trim()
+        $markerOk = [datetime]::TryParse($markerText, [Globalization.CultureInfo]::InvariantCulture,
+                                         [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)
+        if (-not $markerOk) { Add-Warning "The last-run marker $Marker could not be read; using the last 12 hours." }
+    }
     if ($Hours -gt 0) {
         $script:Since = $Now.AddHours(-$Hours)
         $WindowText = "last $Hours hours"
-    } elseif (Test-Path -LiteralPath $Marker) {
-        $script:Since = [datetime]::Parse((Get-Content -LiteralPath $Marker -Raw).Trim(), [Globalization.CultureInfo]::InvariantCulture)
+    } elseif ($markerOk) {
+        $script:Since = $parsed
         $WindowText = 'since last run'
     } else {
         $script:Since = $Now.AddHours(-12)
@@ -502,8 +518,14 @@ try {
                         Where-Object { $_.Extension -match '^\.(png|jpe?g|bmp)$' -and $_.LastWriteTime -ge $script:Since })
         } else { Write-Log "screenshot folder not found: $sd" }
     }
+    $usedNames = @{}
     foreach ($s in @($shots | Sort-Object LastWriteTime -Descending | Select-Object -First $MaxScreenshots)) {
-        if (Copy-ToPackage -File $s -Dest (Join-Path 'screenshots' $s.Name)) { $counts.screenshots++ }
+        # Two folders can hold the same file name: number the later ones instead of overwriting.
+        $name = $s.Name
+        $n = 1
+        while ($usedNames.ContainsKey($name.ToLowerInvariant())) { $n++; $name = '{0}-{1}{2}' -f $s.BaseName, $n, $s.Extension }
+        $usedNames[$name.ToLowerInvariant()] = $true
+        if (Copy-ToPackage -File $s -Dest (Join-Path 'screenshots' $name)) { $counts.screenshots++ }
     }
     if ($shots.Count -gt $MaxScreenshots) { Write-Log "screenshots: kept the newest $MaxScreenshots of $($shots.Count)" }
 
@@ -564,7 +586,7 @@ try {
             Add-Warning "$($counts.events) Windows event(s) about Starfield (crash or hang) in this window."
         }
     } catch {
-        if ($_.Exception.Message -notmatch 'No events were found') { Add-Warning "Could not read the Application event log: $($_.Exception.Message)" }
+        if ($_.FullyQualifiedErrorId -notmatch 'NoMatchingEventsFound') { Add-Warning "Could not read the Application event log: $($_.Exception.Message)" }
         else { Write-Log 'no Windows events about Starfield in the window' }
     }
 

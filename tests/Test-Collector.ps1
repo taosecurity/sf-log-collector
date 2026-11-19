@@ -174,21 +174,56 @@ try {
     # ---------------- 5: -GamePath on a drive that doesn't exist only warns
     Write-Host ''
     Write-Host 'Test 5: -GamePath on a missing drive'
-    $free = @([char[]]([int][char]'Q'..[int][char]'Z') | Where-Object { -not (Test-Path "${_}:\") })[0]
-    $out5 = Join-Path $Root 'out5'
-    $r = Invoke-Collector ($common + @('-GamePath', "${free}:\NoSuchGame", '-OutDir', $out5))
+    $free = @([char[]]([int][char]'G'..[int][char]'Z') | Where-Object { -not (Test-Path "${_}:\") })
+    if ($free.Count -eq 0) {
+        Write-Host '  skip (every drive letter from G to Z is in use)'
+    } else {
+        $out5 = Join-Path $Root 'out5'
+        $r = Invoke-Collector ($common + @('-GamePath', "$($free[-1]):\NoSuchGame", '-OutDir', $out5))
+        Assert ($r.code -eq 0) "exit code 0 (got $($r.code))"
+        $z = Open-Zip $out5
+        Assert (@($z.manifest.warnings | Where-Object { $_ -match 'No Starfield.exe in -GamePath' }).Count -eq 1) 'warns about the missing drive'
+        Assert (@($z.manifest.warnings | Where-Object { $_ -match 'Path not found' }).Count -eq 1) 'names the path on the missing drive'
+    }
+
+    # ---------------- 5b: a damaged marker falls back to 12 hours
+    Write-Host ''
+    Write-Host 'Test 5b: damaged last-run marker'
+    $out5b = Join-Path $Root 'out5b'
+    [void](New-Item -ItemType Directory -Path $out5b -Force)
+    [System.IO.File]::WriteAllText((Join-Path $out5b ('.last-run-' + $env:USERNAME)), 'not a date')
+    $r = Invoke-Collector ($common[3..($common.Count - 1)] + @('-NoPrompt', '-GamePath', (Join-Path $Root 'Game'), '-OutDir', $out5b))
     Assert ($r.code -eq 0) "exit code 0 (got $($r.code))"
-    $z = Open-Zip $out5
-    Assert (@($z.manifest.warnings | Where-Object { $_ -match 'No Starfield.exe in -GamePath' }).Count -eq 1) 'warns about the missing drive'
+    $z = Open-Zip $out5b
+    Assert ($z.manifest.window.how -match '12 hours') "window falls back to 12 hours ($($z.manifest.window.how))"
+    Assert (@($z.manifest.warnings | Where-Object { $_ -match 'marker' }).Count -eq 1) 'warns about the marker'
+
+    # ---------------- 5c: same screenshot name in two folders
+    Write-Host ''
+    Write-Host 'Test 5c: same screenshot name in two folders'
+    New-File 'ShotsA\same.png' 'one' | Out-Null
+    New-File 'ShotsB\same.png' 'two' | Out-Null
+    $out5c = Join-Path $Root 'out5c'
+    $args5c = @('-NoPrompt', '-Hours', '2', '-MyGamesDir', (Join-Path $Root 'MyGames'), '-PluginsTxtDir', (Join-Path $Root 'LocalApp\Starfield'),
+        '-DownloadsDir', (Join-Path $Root 'Downloads'), '-SavesDir', (Join-Path $Root 'Saves'), '-GamePath', (Join-Path $Root 'Game'),
+        '-ScreenshotDir', ((Join-Path $Root 'ShotsA') + ';' + (Join-Path $Root 'ShotsB')), '-OutDir', $out5c)
+    $r = Invoke-Collector $args5c
+    $z = Open-Zip $out5c
+    Assert (@($z.names | Where-Object { $_ -match '^screenshots/same(-2)?\.png$' }).Count -eq 2) 'both screenshots kept'
 
     # ---------------- 6: the launcher passes the exit code on
     Write-Host ''
     Write-Host 'Test 6: .cmd launcher'
     $cmd = Join-Path (Split-Path $PSScriptRoot -Parent) 'Collect-StarfieldTestLogs.cmd'
     $out6 = Join-Path $Root 'out6'
-    $null = cmd.exe /c "echo.| `"$cmd`" -NoPrompt -Hours 1 -MyGamesDir `"$(Join-Path $Root 'MyGames')`" -OutDir `"$out6`" >nul 2>&1"
+    $q = { param($p) '"' + (Join-Path $Root $p) + '"' }
+    $fake = "-MyGamesDir $(& $q 'MyGames') -PluginsTxtDir $(& $q 'LocalApp\Starfield') -DownloadsDir $(& $q 'Downloads') " +
+            "-ScreenshotDir $(& $q 'Shots') -SavesDir $(& $q 'Saves') -GamePath $(& $q 'Game')"
+    $null = cmd.exe /c "echo.| `"$cmd`" -NoPrompt -Hours 1 $fake -OutDir `"$out6`" >nul 2>&1"
     Assert ($LASTEXITCODE -eq 0) "launcher exit code 0 (got $LASTEXITCODE)"
     Assert (@(Get-ChildItem -LiteralPath $out6 -Filter '*.zip' -ErrorAction SilentlyContinue).Count -eq 1) 'launcher made a zip'
+    $null = cmd.exe /c "echo.| `"$cmd`" -NoSuchOption $fake -OutDir `"$out6`" >nul 2>&1"
+    Assert ($LASTEXITCODE -ne 0) "launcher passes a failure on (got $LASTEXITCODE)"
 } finally {
     Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue
 }

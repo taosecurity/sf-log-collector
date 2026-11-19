@@ -36,7 +36,7 @@ The bundled test builds a fake Starfield setup in the temp folder and needs no g
 
     powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Collector.ps1
 
-It ends with `59 passed, 0 failed` and exit code 0. On a player's PC, a dry run is the quick check (it writes a
+It ends with `65 passed, 0 failed` and exit code 0. On a player's PC, a dry run is the quick check (it writes a
 zip but doesn't move the "last run" marker):
 
     powershell -NoProfile -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -NoPrompt -DryRun
