@@ -494,14 +494,15 @@ function ConvertFrom-QtIniKey([string]$Key) {
 # INI keys ignore case on Windows) with '/' between section and key: "settings/profiles_directory";
 # keys in [General] have no section: "selected_profile".
 function Read-MO2Ini([string]$Path) {
-    # Qt parses [General] before the named sections, so a named section's value wins over the same key
-    # written as section\key under [General], whatever the order in the file.
-    $general = @{}
-    $named = @{}
+    # Qt keeps sections in a map sorted by lowercased name and parses them in that order ([General] is
+    # "" and comes first), so when two sections give the same full key, the one later in sorted order
+    # wins, whatever the order in the file. Within a section the later line wins.
+    $bySection = @{}
     $section = ''
     # Shared read, write and delete, so a running MO2 that holds the file open doesn't stop the read.
-    # Windows refuses to rename a file over one that is open (tested 2026-11-19, any sharing mode), so
-    # the file is read in one go and closed at once. UTF-8, and only a UTF-8 byte-order
+    # No sharing mode lets MO2 save meanwhile: Windows refuses to rename a file over one that is open
+    # (tested 2026-11-19). What protects MO2's saves is that the file is read in one go and closed at
+    # once (milliseconds). UTF-8, and only a UTF-8 byte-order
     # mark is dropped, as in Qt. Limits: a raw non-ASCII byte in a section or key name and a %-escape
     # with a sign or 0x are read slightly differently from Qt; MO2 writes neither.
     $fs = [System.IO.File]::Open($Path, 'Open', 'Read', [System.IO.FileShare]'ReadWrite, Delete')
@@ -521,12 +522,13 @@ function Read-MO2Ini([string]$Path) {
         }
         if ($line.eq -lt 0) { continue }
         $k = (ConvertFrom-QtIniKey $t.Substring(0, $line.eq).TrimEnd(' ', "`t")).ToLowerInvariant()
-        $target = $(if ($section) { $named } else { $general })
-        $target[$section + $k] = ConvertFrom-QtIniValue $t.Substring($line.eq + 1)
+        if (-not $bySection.ContainsKey($section)) { $bySection[$section] = [ordered]@{} }
+        $bySection[$section][$section + $k] = ConvertFrom-QtIniValue $t.Substring($line.eq + 1)
     }
+    $names = [string[]]@($bySection.Keys)
+    [Array]::Sort($names, [StringComparer]::Ordinal)
     $vals = @{}
-    foreach ($key in $general.Keys) { $vals[$key] = $general[$key] }
-    foreach ($key in $named.Keys) { $vals[$key] = $named[$key] }
+    foreach ($s in $names) { foreach ($key in $bySection[$s].Keys) { $vals[$key] = $bySection[$s][$key] } }
     return $vals
 }
 
