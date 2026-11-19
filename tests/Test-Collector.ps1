@@ -229,7 +229,36 @@ try {
     $z = Open-Zip $out5d
     Assert (@($z.manifest.warnings | Where-Object { $_ -match 'No save files found in %USERPROFILE%\.' }).Count -eq 1) 'warning ends with %USERPROFILE%.'
     Assert (-not ($z.raw.ToLowerInvariant().Contains(($prof5 -replace '\\', '\\').ToLowerInvariant()))) 'manifest hides the user folder'
-    Assert (-not ($z.raw -match [regex]::Escape('.last-run-' + $env:USERNAME))) 'manifest hides the user name in the marker name'
+    $log5d = Get-Content -LiteralPath (Join-Path $z.dir 'collector-log.txt') -Raw
+    Assert ($log5d -match '\.last-run-%USERNAME%') 'collector-log.txt names the marker as .last-run-%USERNAME%'
+    Assert (-not ($log5d -match [regex]::Escape('.last-run-' + $env:USERNAME) + '(?![\w~-])')) 'collector-log.txt hides the user name in the marker name'
+    Assert (-not ($log5d.ToLowerInvariant().Contains($prof5.ToLowerInvariant()))) 'collector-log.txt hides the user folder'
+    $z5b = Open-Zip $out5b
+    Assert (@($z5b.manifest.warnings | Where-Object { $_ -match '\.last-run-%USERNAME%' }).Count -eq 1) 'marker warning hides the user name'
+
+    # ---------------- 5f: Resolve-MO2Dir, loaded from the script (no run)
+    Write-Host ''
+    Write-Host 'Test 5f: MO2 folder values'
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($Collector, [ref]$null, [ref]$null)
+    $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Resolve-MO2Dir' }, $true)
+    . ([scriptblock]::Create($fn.Extent.Text))
+    # Q: need not exist: the function works on the text only.
+    $cases = @(
+        @('Q:\MO2', '', 'profiles', 'Q:\MO2\profiles'),
+        @('Q:\MO2', 'Q:/Games/MO2/profiles', '', 'Q:\Games\MO2\profiles'),
+        @('Q:\MO2', '%BASE_DIR%/profiles', '', 'Q:\MO2\profiles'),
+        @('Q:\Mods$1\MO2', '%BASE_DIR%/profiles', '', 'Q:\Mods$1\MO2\profiles'),
+        @('Q:\MO2', '//nas/share/profiles', '', '\\nas\share\profiles'),
+        @('Q:\MO2', '\\\\nas\\share\\profiles', '', '\\nas\share\profiles'),
+        @('Q:\MO2', '\\nas\share\profiles', '', '\\nas\share\profiles'),
+        @('Q:\MO2', '/Profiles', '', 'Q:\Profiles'),
+        @('Q:\MO2', '\\Profiles', '', 'Q:\Profiles'),
+        @('Q:\MO2', '\\Mods\\Profiles', '', 'Q:\Mods\Profiles'),
+        @('Q:\MO2', 'sub/profiles', '', 'Q:\MO2\sub\profiles'))
+    foreach ($c in $cases) {
+        $got = Resolve-MO2Dir $c[0] $c[1] $c[2]
+        Assert ($got -eq $c[3]) "Resolve-MO2Dir '$($c[1])' -> $got (want $($c[3]))"
+    }
 
     # ---------------- 5e: MO2 folder at a drive root (\\ in the INI) is not taken for a UNC path
     Write-Host ''

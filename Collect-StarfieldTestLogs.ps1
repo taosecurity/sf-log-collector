@@ -105,10 +105,16 @@ $script:Since = $null
 $script:ProfileRx = $null
 # The lookahead stops C:\Users\a from matching inside C:\Users\ab or C:\Users\a.b, but still matches
 # before a backslash, punctuation, a line break or the end of the text.
-if ($env:USERPROFILE) { $script:ProfileRx = '(?i)' + [regex]::Escape($env:USERPROFILE.TrimEnd('\')) + '(?!\.?[A-Za-z0-9_-])' }
+if ($env:USERPROFILE) {
+    $profForms = @($env:USERPROFILE.TrimEnd('\'))
+    # The 8.3 short form (C:\Users\RICHAR~1) shows up in %TEMP% paths inside logs.
+    try { $profForms += (New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:USERPROFILE).ShortPath.TrimEnd('\') } catch { }
+    $alts = @($profForms | Select-Object -Unique | ForEach-Object { [regex]::Escape($_) }) -join '|'
+    $script:ProfileRx = '(?i)(?:' + $alts + ')(?!\.?[\w~-])'
+}
 # The marker file carries the Windows user name: .last-run-<user>.
 $script:MarkerRx = $null
-if ($env:USERNAME) { $script:MarkerRx = '(?i)\.last-run-' + [regex]::Escape($env:USERNAME) + '(?![A-Za-z0-9_-])' }
+if ($env:USERNAME) { $script:MarkerRx = '(?i)\.last-run-' + [regex]::Escape($env:USERNAME) + '(?![\w~-])' }
 function Hide-Path([string]$Text) {
     if ($null -eq $Text) { return $null }
     if ($script:ProfileRx) { $Text = $Text -replace $script:ProfileRx, '%USERPROFILE%' }
@@ -295,11 +301,14 @@ function Read-MO2Ini([string]$Path) {
     # Keys are stored as "section\key" (settings\profiles_directory) and, for [General], also as the bare key.
     $vals = @{}
     $section = ''
-    foreach ($line in Get-Content -LiteralPath $Path) {
+    # MO2 (Qt) writes UTF-8; Windows PowerShell 5.1 would read it as ANSI without -Encoding.
+    foreach ($line in Get-Content -LiteralPath $Path -Encoding UTF8) {
         if ($line -match '^\s*\[([^\]]+)\]\s*$') { $section = $Matches[1].Trim().ToLowerInvariant(); continue }
         if ($line -match '^\s*([A-Za-z_\\]+)\s*=\s*(.*)$') {
             $k = $Matches[1].ToLowerInvariant()
             $v = $Matches[2].Trim()
+            # Qt quotes values holding commas, semicolons or edge spaces.
+            if ($v.Length -ge 2 -and $v.StartsWith('"') -and $v.EndsWith('"')) { $v = $v.Substring(1, $v.Length - 2) -replace '\\"', '"' }
             if ($v -match '^@ByteArray\((.*)\)$') { $v = $Matches[1] }
             if ($section) { $vals["$section\$k"] = $v }
             if (-not $section -or $section -eq 'general') { $vals[$k] = $v }
@@ -309,15 +318,32 @@ function Read-MO2Ini([string]$Path) {
 }
 
 function Resolve-MO2Dir([string]$Base, [string]$Value, [string]$Default) {
-    if (-not $Value) { return (Join-Path $Base $Default) }
-    # The INI doubles backslashes; undo that but keep a UNC path's leading \\.
-    # A UNC path is \\\\server (doubled) or //server in the INI; a doubled \\ alone is the drive root.
-    $isUnc = $Value.StartsWith('\\\\') -or $Value.StartsWith('//')
-    $v = ($Value -replace '/', '\').TrimStart('\') -replace '\\\\', '\'
-    if ($isUnc) { $v = '\\' + $v }
-    elseif ($Value.StartsWith('\') -or $Value.StartsWith('/')) { $v = '\' + $v }
-    $v = $v -replace '(?i)%BASE_DIR%', $Base
-    if (-not [System.IO.Path]::IsPathRooted($v)) { $v = Join-Path $Base $v }
+    # [IO.Path]::Combine, not Join-Path: Join-Path fails on a drive letter this PC doesn't have.
+    if (-not $Value) { return [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($Base, $Default)) }
+    # MO2 writes forward slashes; values edited by hand (or older ones) may hold backslashes, doubled
+    # (INI-escaped) or single. How the start is read:
+    #   //server/share or \\\\server\\share      -> UNC \\server\share
+    #   \\server\share (single after the start) -> UNC \\server\share
+    #   /dir, \dir, or \\dir\\sub (escaped)      -> the root of the MO2 instance's own drive
+    $s = $Value -replace '/', '\'
+    $kind = 'relative'
+    $rest = $s
+    if ($s.StartsWith('\\\\')) { $kind = 'unc'; $rest = $s.Substring(4) -replace '\\\\', '\' }
+    elseif ($s.StartsWith('\\')) {
+        $r = $s.Substring(2)
+        if ($r.Contains('\\')) { $kind = 'root'; $rest = $r -replace '\\\\', '\' }
+        elseif ($r.Contains('\')) { $kind = 'unc'; $rest = $r }
+        else { $kind = 'root'; $rest = $r }
+    }
+    elseif ($s.StartsWith('\')) { $kind = 'root'; $rest = $s.Substring(1) -replace '\\\\', '\' }
+    else { $rest = $s -replace '\\\\', '\' }
+    # %BASE_DIR% replaced as plain text: a '$' in the folder name must not act as a regex group.
+    $rest = [regex]::Replace($rest, '(?i)%BASE_DIR%', [System.Text.RegularExpressions.MatchEvaluator] { param($m) $Base })
+    switch ($kind) {
+        'unc'  { $v = '\\' + $rest }
+        'root' { $v = [System.IO.Path]::Combine([System.IO.Path]::GetPathRoot([System.IO.Path]::GetFullPath($Base)), $rest) }
+        default { $v = [System.IO.Path]::Combine($Base, $rest) }   # Combine keeps $rest when it is rooted
+    }
     return [System.IO.Path]::GetFullPath($v)
 }
 
@@ -663,7 +689,9 @@ try {
     [System.IO.Compression.ZipFile]::CreateFromDirectory($script:Stage, $ZipPath, [System.IO.Compression.CompressionLevel]::Optimal, $false)
 
     if (-not $DryRun) {
-        [System.IO.File]::WriteAllText($Marker, $Now.ToString('o', [Globalization.CultureInfo]::InvariantCulture))
+        # The zip is made: a marker that can't be written only means the next run's window is wider.
+        try { [System.IO.File]::WriteAllText($Marker, $Now.ToString('o', [Globalization.CultureInfo]::InvariantCulture)) }
+        catch { Add-Warning "Could not update the last-run marker ${Marker}: $($_.Exception.Message). Delete it, or check this folder's permissions." }
     }
 
     # ------------------------------------------------------------ summary
