@@ -108,7 +108,16 @@ $script:ProfileRx = $null
 if ($env:USERPROFILE) {
     $profForms = @($env:USERPROFILE.TrimEnd('\'))
     # The 8.3 short form (C:\Users\RICHAR~1) shows up in %TEMP% paths inside logs.
-    try { $profForms += (New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:USERPROFILE).ShortPath.TrimEnd('\') } catch { }
+    $script:ShortPathNote = $null
+    $fso = $null
+    try {
+        $fso = New-Object -ComObject Scripting.FileSystemObject
+        $profForms += $fso.GetFolder($env:USERPROFILE).ShortPath.TrimEnd('\')
+    } catch {
+        $script:ShortPathNote = "could not get the short (8.3) form of the user folder, so only the long form is hidden: $($_.Exception.Message)"
+    } finally {
+        if ($fso) { [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($fso) }
+    }
     $alts = @($profForms | Select-Object -Unique | ForEach-Object { [regex]::Escape($_) }) -join '|'
     $script:ProfileRx = '(?i)(?:' + $alts + ')(?!\.?[\w~-])'
 }
@@ -296,7 +305,44 @@ function Get-DefaultScreenshotDirs([string]$MyGames) {
     return $dirs
 }
 
-# Reads the few ModOrganizer.ini settings we need. MO2 writes @ByteArray(...) around some values.
+# Decodes one value the way Qt's QSettings (and so MO2 itself) reads its INI: surrounding quotes go,
+# escapes \\ \" \t \n \r \a \b \f \v \? \' \xHHHH and \ooo become characters (an unknown escape keeps its
+# backslash), and @ByteArray(...) holds bytes, decoded as UTF-8.
+function ConvertFrom-QtIniValue([string]$Raw) {
+    $v = $Raw.Trim()
+    if ($v.Length -ge 2 -and $v.StartsWith('"') -and $v.EndsWith('"')) { $v = $v.Substring(1, $v.Length - 2) }
+    $isBytes = $false
+    if ($v.StartsWith('@ByteArray(') -and $v.EndsWith(')')) { $isBytes = $true; $v = $v.Substring(11, $v.Length - 12) }
+    $simple = @{ '\' = '\'; '"' = '"'; "'" = "'"; '?' = '?'; 't' = "`t"; 'n' = "`n"; 'r' = "`r"
+                 'a' = [string][char]7; 'b' = [string][char]8; 'f' = [string][char]12; 'v' = [string][char]11 }
+    $sb = New-Object System.Text.StringBuilder
+    $i = 0
+    while ($i -lt $v.Length) {
+        $c = $v[$i]
+        if ($c -ne '\' -or $i + 1 -ge $v.Length) { [void]$sb.Append($c); $i++; continue }
+        $e = [string]$v[$i + 1]
+        if ($simple.ContainsKey($e)) { [void]$sb.Append($simple[$e]); $i += 2; continue }
+        if ($e -eq 'x') {
+            $j = $i + 2
+            while ($j -lt $v.Length -and $j -lt $i + 6 -and [Uri]::IsHexDigit($v[$j])) { $j++ }
+            if ($j -gt $i + 2) { [void]$sb.Append([char][Convert]::ToInt32($v.Substring($i + 2, $j - $i - 2), 16)); $i = $j; continue }
+        }
+        if ($e -match '^[0-7]$') {
+            $j = $i + 1
+            while ($j -lt $v.Length -and $j -lt $i + 4 -and $v[$j] -match '[0-7]') { $j++ }
+            [void]$sb.Append([char][Convert]::ToInt32($v.Substring($i + 1, $j - $i - 1), 8)); $i = $j; continue
+        }
+        [void]$sb.Append('\'); $i++
+    }
+    $out = $sb.ToString()
+    if ($isBytes -and -not ($out.ToCharArray() | Where-Object { [int]$_ -gt 255 })) {
+        $bytes = [byte[]]@($out.ToCharArray() | ForEach-Object { [byte][int]$_ })
+        $out = [System.Text.Encoding]::UTF8.GetString($bytes)
+    }
+    return $out
+}
+
+# Reads the few ModOrganizer.ini settings we need.
 function Read-MO2Ini([string]$Path) {
     # Keys are stored as "section\key" (settings\profiles_directory) and, for [General], also as the bare key.
     $vals = @{}
@@ -306,10 +352,7 @@ function Read-MO2Ini([string]$Path) {
         if ($line -match '^\s*\[([^\]]+)\]\s*$') { $section = $Matches[1].Trim().ToLowerInvariant(); continue }
         if ($line -match '^\s*([A-Za-z_\\]+)\s*=\s*(.*)$') {
             $k = $Matches[1].ToLowerInvariant()
-            $v = $Matches[2].Trim()
-            # Qt quotes values holding commas, semicolons or edge spaces.
-            if ($v.Length -ge 2 -and $v.StartsWith('"') -and $v.EndsWith('"')) { $v = $v.Substring(1, $v.Length - 2) -replace '\\"', '"' }
-            if ($v -match '^@ByteArray\((.*)\)$') { $v = $Matches[1] }
+            $v = ConvertFrom-QtIniValue $Matches[2]
             if ($section) { $vals["$section\$k"] = $v }
             if (-not $section -or $section -eq 'general') { $vals[$k] = $v }
         }
@@ -320,27 +363,21 @@ function Read-MO2Ini([string]$Path) {
 function Resolve-MO2Dir([string]$Base, [string]$Value, [string]$Default) {
     # [IO.Path]::Combine, not Join-Path: Join-Path fails on a drive letter this PC doesn't have.
     if (-not $Value) { return [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($Base, $Default)) }
-    # MO2 writes forward slashes; values edited by hand (or older ones) may hold backslashes, doubled
-    # (INI-escaped) or single. How the start is read:
-    #   //server/share or \\\\server\\share      -> UNC \\server\share
-    #   \\server\share (single after the start) -> UNC \\server\share
-    #   /dir, \dir, or \\dir\\sub (escaped)      -> the root of the MO2 instance's own drive
+    # $Value is already decoded (ConvertFrom-QtIniValue). MO2 writes forward slashes.
+    #   //server/share -> UNC; /dir -> the root of the MO2 instance's own drive;
+    #   D:dir (no slash after the colon) -> D:\dir; anything else not rooted -> under $Base.
     $s = $Value -replace '/', '\'
     $kind = 'relative'
     $rest = $s
-    if ($s.StartsWith('\\\\')) { $kind = 'unc'; $rest = $s.Substring(4) -replace '\\\\', '\' }
-    elseif ($s.StartsWith('\\')) {
-        $r = $s.Substring(2)
-        if ($r.Contains('\\')) { $kind = 'root'; $rest = $r -replace '\\\\', '\' }
-        elseif ($r.Contains('\')) { $kind = 'unc'; $rest = $r }
-        else { $kind = 'root'; $rest = $r }
-    }
-    elseif ($s.StartsWith('\')) { $kind = 'root'; $rest = $s.Substring(1) -replace '\\\\', '\' }
-    else { $rest = $s -replace '\\\\', '\' }
+    if ($s.StartsWith('\\')) { $kind = 'unc'; $rest = $s.TrimStart('\') }
+    elseif ($s.StartsWith('\')) { $kind = 'root'; $rest = $s.Substring(1) }
+    elseif ($s -match '^([A-Za-z]:)([^\\].*)?$') { $kind = 'drive'; $rest = $s }
+    $rest = $rest -replace '\\{2,}', '\'
     # %BASE_DIR% replaced as plain text: a '$' in the folder name must not act as a regex group.
     $rest = [regex]::Replace($rest, '(?i)%BASE_DIR%', [System.Text.RegularExpressions.MatchEvaluator] { param($m) $Base })
     switch ($kind) {
         'unc'  { $v = '\\' + $rest }
+        'drive' { $v = $rest.Substring(0, 2) + '\' + $rest.Substring(2) }
         'root' { $v = [System.IO.Path]::Combine([System.IO.Path]::GetPathRoot([System.IO.Path]::GetFullPath($Base)), $rest) }
         default { $v = [System.IO.Path]::Combine($Base, $rest) }   # Combine keeps $rest when it is rooted
     }
@@ -355,6 +392,7 @@ try {
     Write-Host "Starfield log collector $ScriptVersion" -ForegroundColor Cyan
     Write-Host ''
     Write-Log "Collect-StarfieldTestLogs $ScriptVersion, PowerShell $($PSVersionTable.PSVersion)"
+    if ($script:ShortPathNote) { Write-Log $script:ShortPathNote }
 
     # .NET file calls don't follow PowerShell's current folder: make every path option a full path.
     function Resolve-Full([string]$P) {
@@ -442,7 +480,7 @@ try {
                 $overwriteDir = Resolve-MO2Dir $base $ini['settings\overwrite_directory'] 'overwrite'
                 if (-not $MO2Profile) { $MO2Profile = $ini['selected_profile'] }
                 if (-not $MO2Profile) { $MO2Profile = 'Default' }
-                $mo2 = [ordered]@{ instance = (Hide-Path $MO2Path); profile = $MO2Profile; profileDir = (Join-Path $profilesDir $MO2Profile); overwrite = $overwriteDir }
+                $mo2 = [ordered]@{ instance = (Hide-Path $MO2Path); profile = $MO2Profile; profileDir = [System.IO.Path]::Combine($profilesDir, $MO2Profile); overwrite = $overwriteDir }
                 Write-Log "MO2: profile '$MO2Profile' in $profilesDir, overwrite $overwriteDir"
                 if (-not (Test-Path -LiteralPath $mo2.profileDir)) { Add-Warning "MO2 profile folder not found: $($mo2.profileDir). Check -MO2Profile." }
             } catch {
@@ -642,6 +680,21 @@ try {
     } catch {
         if ($_.FullyQualifiedErrorId -notmatch 'NoMatchingEventsFound') { Add-Warning "Could not read the Application event log: $($_.Exception.Message)" }
         else { Write-Log 'no Windows events about Starfield in the window' }
+    }
+
+    # Check now that the last-run marker can be written, so a warning about it lands in this zip.
+    # (Opening an existing marker for writing doesn't change it; a new one is tried with a test file.)
+    if (-not $DryRun) {
+        try {
+            if (Test-Path -LiteralPath $Marker) {
+                $probe = [System.IO.File]::Open($Marker, 'Open', 'Write', 'None'); $probe.Dispose()
+            } else {
+                $testFile = Join-Path $OutDir ('.write-test-' + [guid]::NewGuid().ToString('N'))
+                [System.IO.File]::WriteAllText($testFile, ''); Remove-Item -LiteralPath $testFile -Force
+            }
+        } catch {
+            Add-Warning "The last-run marker $Marker can't be written ($($_.Exception.Message)), so the next run will cover a wider window. Check the folder's permissions."
+        }
     }
 
     # ------------------------------------------------------------ manifest

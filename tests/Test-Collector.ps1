@@ -236,29 +236,47 @@ try {
     $z5b = Open-Zip $out5b
     Assert (@($z5b.manifest.warnings | Where-Object { $_ -match '\.last-run-%USERNAME%' }).Count -eq 1) 'marker warning hides the user name'
 
+    # ---------------- 5g: a marker that can't be read or written (a folder by that name)
+    Write-Host ''
+    Write-Host 'Test 5g: marker that cannot be written'
+    $out5g = Join-Path $Root 'out5g'
+    [void](New-Item -ItemType Directory -Path (Join-Path $out5g ('.last-run-' + $env:USERNAME)) -Force)
+    $r = Invoke-Collector ($common[3..($common.Count - 1)] + @('-NoPrompt', '-GamePath', (Join-Path $Root 'Game'), '-OutDir', $out5g))
+    Assert ($r.code -eq 0) "exit code 0 (got $($r.code))"
+    $z = Open-Zip $out5g
+    Assert (@($z.manifest.warnings | Where-Object { $_ -match "can't be written" }).Count -eq 1) 'the zip carries the marker-write warning'
+
     # ---------------- 5f: Resolve-MO2Dir, loaded from the script (no run)
     Write-Host ''
     Write-Host 'Test 5f: MO2 folder values'
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($Collector, [ref]$null, [ref]$null)
-    $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Resolve-MO2Dir' }, $true)
-    . ([scriptblock]::Create($fn.Extent.Text))
-    # Q: need not exist: the function works on the text only.
+    foreach ($name in 'ConvertFrom-QtIniValue', 'Resolve-MO2Dir') {
+        $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
+        . ([scriptblock]::Create($fn.Extent.Text))
+    }
+    # Raw INI text, decoded as MO2 (Qt) decodes it, then resolved. Q: need not exist: it's text only.
     $cases = @(
         @('Q:\MO2', '', 'profiles', 'Q:\MO2\profiles'),
         @('Q:\MO2', 'Q:/Games/MO2/profiles', '', 'Q:\Games\MO2\profiles'),
+        @('Q:\MO2', '"Q:/Games, Mods/MO2/profiles"', '', 'Q:\Games, Mods\MO2\profiles'),
         @('Q:\MO2', '%BASE_DIR%/profiles', '', 'Q:\MO2\profiles'),
         @('Q:\Mods$1\MO2', '%BASE_DIR%/profiles', '', 'Q:\Mods$1\MO2\profiles'),
         @('Q:\MO2', '//nas/share/profiles', '', '\\nas\share\profiles'),
         @('Q:\MO2', '\\\\nas\\share\\profiles', '', '\\nas\share\profiles'),
-        @('Q:\MO2', '\\nas\share\profiles', '', '\\nas\share\profiles'),
+        @('Q:\MO2', '\\\\nas\\share\\\\profiles', '', '\\nas\share\profiles'),
         @('Q:\MO2', '/Profiles', '', 'Q:\Profiles'),
         @('Q:\MO2', '\\Profiles', '', 'Q:\Profiles'),
         @('Q:\MO2', '\\Mods\\Profiles', '', 'Q:\Mods\Profiles'),
+        @('Q:\MO2', 'Q:profiles', '', 'Q:\profiles'),
         @('Q:\MO2', 'sub/profiles', '', 'Q:\MO2\sub\profiles'))
     foreach ($c in $cases) {
-        $got = Resolve-MO2Dir $c[0] $c[1] $c[2]
-        Assert ($got -eq $c[3]) "Resolve-MO2Dir '$($c[1])' -> $got (want $($c[3]))"
+        $got = Resolve-MO2Dir $c[0] (ConvertFrom-QtIniValue $c[1]) $c[2]
+        Assert ($got -eq $c[3]) "MO2 value '$($c[1])' -> $got (want $($c[3]))"
     }
+    $prof = ConvertFrom-QtIniValue '@ByteArray(\xc3\x89quipe)'
+    Assert ($prof -eq ([string][char]0xC9 + 'quipe')) "@ByteArray UTF-8 bytes decoded ($prof)"
+    Assert ((ConvertFrom-QtIniValue '@ByteArray(Star Wars Genesis Compiler)') -eq 'Star Wars Genesis Compiler') '@ByteArray plain text'
+    Assert ((ConvertFrom-QtIniValue 'D:/x\x00e9y') -eq ('D:/x' + [char]0xE9 + 'y')) '\xHHHH escape in a plain value'
 
     # ---------------- 5e: MO2 folder at a drive root (\\ in the INI) is not taken for a UNC path
     Write-Host ''
