@@ -8,8 +8,8 @@
     screenshots, runs the collector with -NoPrompt, and checks the zip. It needs no game.
     Exit code 0 = all passed, 1 = a check failed.
 .PARAMETER Shell
-    The PowerShell to run the collector with: powershell (5.1), pwsh (7), or the path of a PowerShell
-    .exe (a relative path is taken from the current folder). Default: the current one.
+    The PowerShell to run the collector with: powershell (5.1), pwsh (7), or the full path of a
+    PowerShell .exe. Default: the PowerShell running this test.
 #>
 param([string]$Shell = '')
 
@@ -18,20 +18,21 @@ if (-not $Shell) { $Shell = (Get-Process -Id $PID).Path }
 # Resolve the name once, so the log shows the exact program that runs the collector. A name with a
 # slash or backslash is a path (made full, and it must be an .exe); a bare name is looked up on PATH,
 # as & does.
+# Only three forms are accepted, to keep this simple: powershell, pwsh, or the full path of an .exe.
 $given = $Shell
-$usage = 'Pass -Shell powershell, pwsh or the path of one.'
-if ($Shell -match '[\\/:~]') {
-    # PowerShell's own resolver: ~, PowerShell drives and relative paths work as in any cmdlet.
-    try { $Shell = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Shell) }
-    catch { Write-Host "Shell '$given' is not a usable path ($($_.Exception.Message)). $usage" -ForegroundColor Red; exit 1 }
-    if (-not (Test-Path -LiteralPath $Shell -PathType Leaf)) { Write-Host "Shell '$Shell' not found. $usage" -ForegroundColor Red; exit 1 }
-} else {
-    # The name is taken literally (no wildcards) and looked up on PATH, as & does.
-    $found = @(Get-Command -Name ([System.Management.Automation.WildcardPattern]::Escape($Shell)) -CommandType Application -ErrorAction SilentlyContinue)
-    if ($found.Count -eq 0) { Write-Host "Shell '$given' not found on PATH. $usage" -ForegroundColor Red; exit 1 }
+$usage = 'Pass -Shell powershell, pwsh or the full path of a PowerShell .exe.'
+if ($Shell -eq 'powershell' -or $Shell -eq 'pwsh') {
+    $found = @(Get-Command -Name "$Shell.exe" -CommandType Application -ErrorAction SilentlyContinue |
+               Where-Object { [System.IO.Path]::GetExtension($_.Source) -eq '.exe' })
+    if ($found.Count -eq 0) { Write-Host "$Shell.exe not found on PATH. $usage" -ForegroundColor Red; exit 1 }
     $Shell = $found[0].Source
+} elseif ($Shell -match '^([A-Za-z]:\\|\\\\)' -and [System.IO.Path]::GetExtension($Shell) -eq '.exe') {
+    $exists = $false
+    try { $exists = Test-Path -LiteralPath $Shell -PathType Leaf -ErrorAction Stop } catch { }
+    if (-not $exists) { Write-Host "Shell '$given' not found or not readable. $usage" -ForegroundColor Red; exit 1 }
+} else {
+    Write-Host "Shell '$given' is not accepted. $usage" -ForegroundColor Red; exit 1
 }
-if ([System.IO.Path]::GetExtension($Shell) -ne '.exe') { Write-Host "Shell '$Shell' is not an .exe file. $usage" -ForegroundColor Red; exit 1 }
 $ShellEdition = (@(& $Shell -NoProfile -Command '$PSVersionTable.PSEdition; $PSVersionTable.PSVersion.ToString()') -join ' ').Trim()
 if ($LASTEXITCODE -ne 0 -or -not $ShellEdition) { Write-Host "Shell '$Shell' did not start (exit $LASTEXITCODE)." -ForegroundColor Red; exit 1 }
 $Collector = Join-Path (Split-Path $PSScriptRoot -Parent) 'Collect-StarfieldTestLogs.ps1'
