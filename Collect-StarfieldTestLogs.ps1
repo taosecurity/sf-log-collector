@@ -310,12 +310,13 @@ function Get-DefaultScreenshotDirs([string]$MyGames) {
 # Decodes one value the way Qt's QSettings (and so MO2 itself) reads its INI, in Qt's order:
 #   1. surrounding quotes go;
 #   2. escapes become characters: \\ \" \' \? \t \n \r \a \b \f \v (lowercase only, so \T in D:\Tools
-#      stays as typed), \xHHHH and \ooo; an unknown escape keeps its backslash;
+#      stays as typed), \x with up to 4 hex digits and \ooo; an unknown escape keeps its backslash
+#      (MO2 itself writes forward slashes and no escapes, so these only matter for hand edits);
 #   3. then the leading-@ forms of the decoded text: @ByteArray(...) holds bytes (decoded as UTF-8),
 #      @Invalid() is no value, and @@ stands for a literal @.
 function ConvertFrom-QtIniValue([string]$Raw) {
     $v = $Raw.Trim()
-    if ($v.Length -ge 2 -and $v.StartsWith('"') -and $v.EndsWith('"')) { $v = $v.Substring(1, $v.Length - 2) }
+    if ($v.Length -ge 2 -and $v.StartsWith('"', [StringComparison]::Ordinal) -and $v.EndsWith('"', [StringComparison]::Ordinal)) { $v = $v.Substring(1, $v.Length - 2) }
     # Case-sensitive table: Qt knows only the lowercase escapes (\T in D:\Tools is not a tab).
     $simple = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::Ordinal)
     foreach ($p in @(@('\', '\'), @('"', '"'), @("'", "'"), @('?', '?'), @('t', "`t"), @('n', "`n"), @('r', "`r"),
@@ -342,13 +343,15 @@ function ConvertFrom-QtIniValue([string]$Raw) {
         [void]$sb.Append('\'); $i++
     }
     $out = $sb.ToString()
-    if ($out.StartsWith('@ByteArray(') -and $out.EndsWith(')')) {
+    $ord = [StringComparison]::Ordinal
+    if ($out.StartsWith('@ByteArray(', $ord) -and $out.EndsWith(')', $ord)) {
         $inner = $out.Substring(11, $out.Length - 12)
-        if ($inner.ToCharArray() | Where-Object { [int]$_ -gt 255 }) { return $inner }
-        return [System.Text.Encoding]::UTF8.GetString([byte[]]@($inner.ToCharArray() | ForEach-Object { [byte][int]$_ }))
+        # Qt turns the text into bytes with toLatin1 (a character above 255 becomes '?'), then UTF-8.
+        $bytes = [byte[]]@($inner.ToCharArray() | ForEach-Object { if ([int]$_ -gt 255) { 63 } else { [int]$_ } })
+        return [System.Text.Encoding]::UTF8.GetString($bytes)
     }
     if ($out -ceq '@Invalid()') { return '' }
-    if ($out.StartsWith('@@')) { return $out.Substring(1) }
+    if ($out.StartsWith('@@', $ord)) { return $out.Substring(1) }
     return $out
 }
 
@@ -761,7 +764,8 @@ try {
         try {
             $bytes = [System.Text.Encoding]::ASCII.GetBytes($Now.ToString('o', [Globalization.CultureInfo]::InvariantCulture))
             # OpenOrCreate rather than WriteAllText (FileMode.Create), which refuses a hidden file. The new
-            # time is written before the file is trimmed, so a failed write never leaves it empty.
+            # time is written before the file is trimmed, so an existing marker is never emptied (a failed
+            # first write can leave an empty one, which the next run reports and replaces).
             $fs = [System.IO.File]::Open($Marker, 'OpenOrCreate', 'Write', 'None')
             try { $fs.Write($bytes, 0, $bytes.Length); $fs.SetLength($bytes.Length) } finally { $fs.Dispose() }
         } catch {
