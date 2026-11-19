@@ -494,9 +494,12 @@ function ConvertFrom-QtIniKey([string]$Key) {
 # INI keys ignore case on Windows) with '/' between section and key: "settings/profiles_directory";
 # keys in [General] have no section: "selected_profile".
 function Read-MO2Ini([string]$Path) {
-    # Qt keeps sections in a map sorted by lowercased name and parses them in that order ([General] is
-    # "" and comes first), so when two sections give the same full key, the one later in sorted order
-    # wins, whatever the order in the file. Within a section the later line wins.
+    # Qt keeps sections in a map sorted by lowercased name ([General] is "" and comes first). This reads
+    # every section in that order, as Qt does when it reads the whole file; when two sections give the
+    # same full key, the later one in sorted order wins (within a section, the later line). Qt reads
+    # sections lazily for single lookups, so for such duplicated keys (which MO2 never writes) MO2 may
+    # pick another one. Section names are lowercased with .NET's invariant rules, which differ from
+    # Qt's for a few %U-escaped letters.
     $bySection = @{}
     $section = ''
     # Shared read, write and delete, so a running MO2 that holds the file open doesn't stop the read.
