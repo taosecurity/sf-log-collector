@@ -24,11 +24,13 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
+      # A step's shell can't come from the matrix: the harness runs in pwsh and starts the collector in
+      # the matrix's PowerShell (powershell = Windows PowerShell 5.1, pwsh = PowerShell 7).
       - name: Tests
-        shell: ${{ matrix.shell }}
+        shell: pwsh
         run: ./tests/Test-Collector.ps1 -Shell ${{ matrix.shell }}
-      - name: Release zip builds
-        shell: ${{ matrix.shell }}
+      - name: Release zip builds (Windows PowerShell 5.1)
+        shell: powershell
         run: ./build_release.ps1
 
   release:
