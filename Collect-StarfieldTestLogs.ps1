@@ -309,14 +309,17 @@ function Get-DefaultScreenshotDirs([string]$MyGames) {
 
 # Decodes one value the way Qt's QSettings (and so MO2 itself) reads its INI. A port of Qt 5.15's
 # QSettingsPrivate::iniUnescapedStringList and stringToVariant (qsettings.cpp), checked 2026-11-19:
-#   - leading spaces are skipped; trailing spaces are cut unless the value was quoted;
-#   - a double quote toggles quoting anywhere and is removed; a comma outside quotes splits a list
-#     (a list comes back joined with commas: MO2's folder settings are never lists);
+#   - leading spaces are skipped; trailing spaces are cut unless the value was quoted (or ends in a
+#     lone backslash);
+#   - a double quote toggles quoting anywhere and is removed; a comma outside quotes makes a list,
+#     which MO2 reads as an empty string (so the default folder is used);
+#   - a backslash at the end of a line continues the value on the next line (Read-MO2Ini joins them);
 #   - escapes \a \b \f \n \r \t \v \" \? \' \\ (lowercase only); \x plus every hex digit after it, and
 #     \ plus octal digits, keep the low 16 bits; \x with no hex digit, an unknown escape (\M in
 #     D:\Mods) and a lone trailing backslash are dropped entirely, as Qt drops them;
 #   - then the decoded text's @ forms: @ByteArray(...) holds bytes (Latin-1, so a character above 255
-#     becomes '?'; MO2 reads them as UTF-8), @String(...), @Invalid() is no value, @@ is a literal @.
+#     becomes '?'; MO2 reads them as UTF-8), @String(...), @Invalid() and the typed forms @Variant,
+#     @DateTime, @Rect, @Size and @Point are no string (""), and @@ is a literal @.
 # MO2 stores paths with forward slashes, so the escapes matter for quotes, @ and hand edits.
 function ConvertFrom-QtIniValue([string]$Raw) {
     $codes = New-Object 'System.Collections.Generic.Dictionary[char,char]'
@@ -332,13 +335,15 @@ function ConvertFrom-QtIniValue([string]$Raw) {
     $i = 0
     while ($i -lt $n -and ($v[$i] -eq ' ' -or $v[$i] -eq "`t")) { $i++ }
     $chop = 0
+    $skipCut = $false
     $isHex = { param($ch) ($ch -ge [char]'0' -and $ch -le [char]'9') -or ($ch -ge [char]'a' -and $ch -le [char]'f') -or ($ch -ge [char]'A' -and $ch -le [char]'F') }
     $cutTrailing = { while ($sb.Length -gt $chop -and ($sb[$sb.Length - 1] -eq ' ' -or $sb[$sb.Length - 1] -eq "`t")) { [void]$sb.Remove($sb.Length - 1, 1) } }
     while ($i -lt $n) {
         $c = $v[$i]
         if ($c -eq '\') {
             $i++
-            if ($i -ge $n) { break }
+            # Qt's "goto end": a lone trailing backslash ends the value without cutting spaces.
+            if ($i -ge $n) { $skipCut = $true; break }
             $e = $v[$i]; $i++
             if ($codes.ContainsKey($e)) { [void]$sb.Append($codes[$e]) }
             elseif ($e -ceq 'x') {
@@ -376,10 +381,16 @@ function ConvertFrom-QtIniValue([string]$Raw) {
         }
         else { [void]$sb.Append($c); $i++ }
     }
-    if (-not $quoted) { & $cutTrailing }
-    if ($isList) { $items.Add($sb.ToString()); $out = $items -join ',' } else { $out = $sb.ToString() }
+    if (-not $quoted -and -not $skipCut) { & $cutTrailing }
+    # A list (two or more items) is a QStringList; MO2 reads it as a string, which gives "".
+    if ($isList) { return '' }
+    $out = $sb.ToString()
     $ord = [StringComparison]::Ordinal
     if ($out.StartsWith('@String(', $ord) -and $out.EndsWith(')', $ord)) { return $out.Substring(8, $out.Length - 9) }
+    # Qt's other typed forms are not strings: MO2 reads them as "".
+    foreach ($typed in '@Variant(', '@DateTime(', '@Rect(', '@Size(', '@Point(') {
+        if ($out.StartsWith($typed, $ord) -and $out.EndsWith(')', $ord)) { return '' }
+    }
     if ($out.StartsWith('@ByteArray(', $ord) -and $out.EndsWith(')', $ord)) {
         $inner = $out.Substring(11, $out.Length - 12)
         # Qt turns the text into bytes with toLatin1 (a character above 255 becomes '?'), then UTF-8.
@@ -397,9 +408,20 @@ function Read-MO2Ini([string]$Path) {
     $vals = @{}
     $section = ''
     # MO2 (Qt) writes UTF-8; Windows PowerShell 5.1 would read it as ANSI without -Encoding.
-    foreach ($line in Get-Content -LiteralPath $Path -Encoding UTF8) {
+    # A line ending in an odd number of backslashes continues on the next line (Qt's readIniLine);
+    # the backslash and line break stay in the text, and the decoder drops them as Qt does.
+    $raw = @(Get-Content -LiteralPath $Path -Encoding UTF8)
+    $lines = New-Object System.Collections.Generic.List[string]
+    for ($r = 0; $r -lt $raw.Count; $r++) {
+        $joined = [string]$raw[$r]
+        while ($r + 1 -lt $raw.Count -and ($joined.Length - $joined.TrimEnd('\').Length) % 2 -eq 1) {
+            $r++; $joined = $joined + "`n" + [string]$raw[$r]
+        }
+        $lines.Add($joined)
+    }
+    foreach ($line in $lines) {
         if ($line -match '^\s*\[([^\]]+)\]\s*$') { $section = $Matches[1].Trim().ToLowerInvariant(); continue }
-        if ($line -match '^\s*([A-Za-z_\\]+)\s*=\s*(.*)$') {
+        if ($line -match '(?s)^\s*([A-Za-z_\\]+)\s*=\s*(.*)$') {
             $k = $Matches[1].ToLowerInvariant()
             $v = ConvertFrom-QtIniValue $Matches[2]
             if ($section) { $vals["$section\$k"] = $v }

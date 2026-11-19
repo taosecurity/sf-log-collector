@@ -313,7 +313,19 @@ try {
     Assert ((ConvertFrom-QtIniValue '  abc  ') -ceq 'abc') 'unquoted edge spaces cut'
     Assert ((ConvertFrom-QtIniValue '"abc  "') -ceq 'abc  ') 'quoted trailing spaces kept'
     Assert ((ConvertFrom-QtIniValue '@String(x)') -ceq 'x') '@String(...)'
-    Assert ((ConvertFrom-QtIniValue 'a, b') -ceq 'a,b') 'an unquoted comma makes a list'
+    Assert ((ConvertFrom-QtIniValue 'a, b') -ceq '') 'an unquoted comma makes a list, which MO2 reads as ""'
+    Assert ((ConvertFrom-QtIniValue 'abc,') -ceq '') 'a trailing comma makes a list too'
+    Assert ((ConvertFrom-QtIniValue 'abc  \') -ceq 'abc  ') 'a trailing backslash keeps the spaces before it'
+    Assert ((ConvertFrom-QtIniValue '@Variant(\0\0\0\x7f)') -ceq '') '@Variant(...) is not a string'
+    # Read-MO2Ini joins a line that ends in a backslash with the next one, as Qt does.
+    $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Read-MO2Ini' }, $true)
+    . ([scriptblock]::Create($fn.Extent.Text))
+    $iniC = New-File 'IniCont\ModOrganizer.ini' "[General]`r`nselected_profile=@ByteArray(Test)`r`n[Settings]`r`nprofiles_directory=D:/Mods/x\`r`nmod_directory=E:/m`r`noverwrite_directory=D:/ow`r`n"
+    $vals = Read-MO2Ini $iniC
+    Assert ($vals['settings\profiles_directory'] -ceq 'D:/Mods/xmod_directory=E:/m') "continued line joined as Qt reads it ($($vals['settings\profiles_directory']))"
+    Assert (-not $vals.ContainsKey('settings\mod_directory')) 'the continued line is not a key of its own'
+    Assert ($vals['settings\overwrite_directory'] -ceq 'D:/ow') 'the line after it is read normally'
+    Assert ($vals['selected_profile'] -ceq 'Test') '[General] key read bare'
 
     # ---------------- 5e: MO2 folder at a drive root (\\ in the INI) is not taken for a UNC path
     Write-Host ''
