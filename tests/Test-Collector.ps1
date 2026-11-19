@@ -284,7 +284,8 @@ try {
         @('Q:\MO2', '\\Profiles', '', 'Q:\Profiles'),
         @('Q:\MO2', '\\Mods\\Profiles', '', 'Q:\Mods\Profiles'),
         @('Q:\MO2', 'Q:profiles', '', 'Q:\profiles'),
-        @('Q:\MO2', 'Q:\Games\Tools\Xbox\Backup', '', 'Q:\Games\Tools\Xbox\Backup'),
+        # Qt drops unknown escapes with their backslash, so MO2 itself reads a hand-typed D:\Games\... this way:
+        @('Q:\MO2', 'Q:\Games\Tools\Xbox\Backup', '', 'Q:\amesoolsboxackup'),
         @('Q:\MO2', '@@odd/profiles', '', 'Q:\MO2\@odd\profiles'),
         @('Q:\MO2', 'sub/profiles', '', 'Q:\MO2\sub\profiles'))
     foreach ($c in $cases) {
@@ -302,8 +303,17 @@ try {
     Assert ((ConvertFrom-QtIniValue '@ByteArray(\x4e00Team)') -ceq '?Team') '@ByteArray character above 255 becomes ? as in Qt'
     # Compared ordinally: -ceq uses the culture, which ignores the soft hyphen.
     Assert ([string]::Equals((ConvertFrom-QtIniValue '\x00ad@@foo'), ([string][char]0xAD + '@@foo'), [StringComparison]::Ordinal)) 'leading-@ checks are ordinal'
-    Assert ((ConvertFrom-QtIniValue 'a\x0041BCz') -ceq ('a' + [char]0x41BC + 'z')) '\x reads every hex digit, low 16 bits kept'
+    Assert ((ConvertFrom-QtIniValue 'a\x0041BCz') -ceq ('a' + [char]0x41BC + 'z')) '\x reads every hex digit'
+    Assert ((ConvertFrom-QtIniValue 'a\x12345z') -ceq ('a' + [char]0x2345 + 'z')) '\x keeps the low 16 bits'
     Assert ((ConvertFrom-QtIniValue 'a\101b') -ceq 'aAb') 'octal escape'
+    Assert ((ConvertFrom-QtIniValue 'a\1234567') -ceq ('a' + [char]0x3977)) 'octal keeps the low 16 bits (01234567 = 0x53977)'
+    Assert ((ConvertFrom-QtIniValue 'D:/a\xyz') -ceq 'D:/ayz') '\x with no hex digit is dropped'
+    Assert ((ConvertFrom-QtIniValue 'abc\') -ceq 'abc') 'a lone trailing backslash is dropped'
+    Assert ((ConvertFrom-QtIniValue 'a"b, c"d') -ceq 'ab, cd') 'quotes toggle anywhere; comma inside quotes stays'
+    Assert ((ConvertFrom-QtIniValue '  abc  ') -ceq 'abc') 'unquoted edge spaces cut'
+    Assert ((ConvertFrom-QtIniValue '"abc  "') -ceq 'abc  ') 'quoted trailing spaces kept'
+    Assert ((ConvertFrom-QtIniValue '@String(x)') -ceq 'x') '@String(...)'
+    Assert ((ConvertFrom-QtIniValue 'a, b') -ceq 'a,b') 'an unquoted comma makes a list'
 
     # ---------------- 5e: MO2 folder at a drive root (\\ in the INI) is not taken for a UNC path
     Write-Host ''

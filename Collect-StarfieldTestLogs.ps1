@@ -307,47 +307,79 @@ function Get-DefaultScreenshotDirs([string]$MyGames) {
     return $dirs
 }
 
-# Decodes one value the way Qt's QSettings (and so MO2 itself) reads its INI, in Qt's order:
-#   1. surrounding quotes go;
-#   2. escapes become characters: \\ \" \' \? \t \n \r \a \b \f \v (lowercase only, so \T in D:\Tools
-#      stays as typed), \x and \o with all the hex or octal digits that follow (low 16 bits kept);
-#      an unknown escape keeps its backslash. MO2 stores paths with forward slashes, but Qt still
-#      escapes quotes, control characters and sometimes non-ASCII text when it writes;
-#   3. then the leading-@ forms of the decoded text: @ByteArray(...) holds bytes (decoded as UTF-8),
-#      @Invalid() is no value, and @@ stands for a literal @.
+# Decodes one value the way Qt's QSettings (and so MO2 itself) reads its INI. A port of Qt 5.15's
+# QSettingsPrivate::iniUnescapedStringList and stringToVariant (qsettings.cpp), checked 2026-11-19:
+#   - leading spaces are skipped; trailing spaces are cut unless the value was quoted;
+#   - a double quote toggles quoting anywhere and is removed; a comma outside quotes splits a list
+#     (a list comes back joined with commas: MO2's folder settings are never lists);
+#   - escapes \a \b \f \n \r \t \v \" \? \' \\ (lowercase only); \x plus every hex digit after it, and
+#     \ plus octal digits, keep the low 16 bits; \x with no hex digit, an unknown escape (\M in
+#     D:\Mods) and a lone trailing backslash are dropped entirely, as Qt drops them;
+#   - then the decoded text's @ forms: @ByteArray(...) holds bytes (Latin-1, so a character above 255
+#     becomes '?'; MO2 reads them as UTF-8), @String(...), @Invalid() is no value, @@ is a literal @.
+# MO2 stores paths with forward slashes, so the escapes matter for quotes, @ and hand edits.
 function ConvertFrom-QtIniValue([string]$Raw) {
-    $v = $Raw.Trim()
-    if ($v.Length -ge 2 -and $v.StartsWith('"', [StringComparison]::Ordinal) -and $v.EndsWith('"', [StringComparison]::Ordinal)) { $v = $v.Substring(1, $v.Length - 2) }
-    # Case-sensitive table: Qt knows only the lowercase escapes (\T in D:\Tools is not a tab).
-    $simple = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::Ordinal)
-    foreach ($p in @(@('\', '\'), @('"', '"'), @("'", "'"), @('?', '?'), @('t', "`t"), @('n', "`n"), @('r', "`r"),
-                     @('a', [string][char]7), @('b', [string][char]8), @('f', [string][char]12), @('v', [string][char]11))) {
-        $simple[$p[0]] = $p[1]
+    $codes = New-Object 'System.Collections.Generic.Dictionary[char,char]'
+    foreach ($p in @(@('a', 7), @('b', 8), @('f', 12), @('n', 10), @('r', 13), @('t', 9), @('v', 11),
+                     @('"', 34), @('?', 63), @("'", 39), @('\', 92))) {
+        $codes[[char]$p[0]] = [char]$p[1]
     }
+    $v = $Raw
+    $n = $v.Length
     $sb = New-Object System.Text.StringBuilder
+    $items = New-Object System.Collections.Generic.List[string]
+    $isList = $false; $inQuote = $false; $quoted = $false
     $i = 0
-    while ($i -lt $v.Length) {
+    while ($i -lt $n -and ($v[$i] -eq ' ' -or $v[$i] -eq "`t")) { $i++ }
+    $chop = 0
+    $isHex = { param($ch) ($ch -ge [char]'0' -and $ch -le [char]'9') -or ($ch -ge [char]'a' -and $ch -le [char]'f') -or ($ch -ge [char]'A' -and $ch -le [char]'F') }
+    $cutTrailing = { while ($sb.Length -gt $chop -and ($sb[$sb.Length - 1] -eq ' ' -or $sb[$sb.Length - 1] -eq "`t")) { [void]$sb.Remove($sb.Length - 1, 1) } }
+    while ($i -lt $n) {
         $c = $v[$i]
-        if ($c -ne '\' -or $i + 1 -ge $v.Length) { [void]$sb.Append($c); $i++; continue }
-        $e = [string]$v[$i + 1]
-        if ($simple.ContainsKey($e)) { [void]$sb.Append($simple[$e]); $i += 2; continue }
-        if ($e -ceq 'x') {
-            $j = $i + 2
-            # Like Qt: every hex digit that follows, keeping the low 16 bits.
-            $code = 0
-            while ($j -lt $v.Length -and [Uri]::IsHexDigit($v[$j])) { $code = (($code -shl 4) -bor [Convert]::ToInt32([string]$v[$j], 16)) -band 0xFFFF; $j++ }
-            if ($j -gt $i + 2) { [void]$sb.Append([char]$code); $i = $j; continue }
+        if ($c -eq '\') {
+            $i++
+            if ($i -ge $n) { break }
+            $e = $v[$i]; $i++
+            if ($codes.ContainsKey($e)) { [void]$sb.Append($codes[$e]) }
+            elseif ($e -ceq 'x') {
+                if ($i -lt $n -and (& $isHex $v[$i])) {
+                    $code = 0
+                    while ($i -lt $n -and (& $isHex $v[$i])) { $code = (($code -shl 4) + [Convert]::ToInt32([string]$v[$i], 16)) -band 0xFFFF; $i++ }
+                    [void]$sb.Append([char]$code)
+                }
+            }
+            elseif ($e -ge [char]'0' -and $e -le [char]'7') {
+                $code = [int][string]$e
+                while ($i -lt $n -and $v[$i] -ge [char]'0' -and $v[$i] -le [char]'7') { $code = (($code -shl 3) + [int][string]$v[$i]) -band 0xFFFF; $i++ }
+                [void]$sb.Append([char]$code)
+            }
+            elseif ($e -eq "`n" -or $e -eq "`r") {
+                if ($i -lt $n -and ($v[$i] -eq "`n" -or $v[$i] -eq "`r") -and $v[$i] -ne $e) { $i++ }
+            }
+            # any other escaped character is skipped, with its backslash
+            $chop = $sb.Length
         }
-        if ($e -match '^[0-7]$') {
-            $j = $i + 1
-            $code = 0
-            while ($j -lt $v.Length -and $v[$j] -match '[0-7]') { $code = (($code -shl 3) -bor [int][string]$v[$j]) -band 0xFFFF; $j++ }
-            [void]$sb.Append([char]$code); $i = $j; continue
+        elseif ($c -eq '"') {
+            $i++; $quoted = $true; $inQuote = -not $inQuote
+            if (-not $inQuote) {
+                while ($i -lt $n -and ($v[$i] -eq ' ' -or $v[$i] -eq "`t")) { $i++ }
+                $chop = $sb.Length
+            }
         }
-        [void]$sb.Append('\'); $i++
+        elseif ($c -eq ',' -and -not $inQuote) {
+            if (-not $quoted) { & $cutTrailing }
+            $isList = $true
+            $items.Add($sb.ToString()); [void]$sb.Clear(); $quoted = $false
+            $i++
+            while ($i -lt $n -and ($v[$i] -eq ' ' -or $v[$i] -eq "`t")) { $i++ }
+            $chop = 0
+        }
+        else { [void]$sb.Append($c); $i++ }
     }
-    $out = $sb.ToString()
+    if (-not $quoted) { & $cutTrailing }
+    if ($isList) { $items.Add($sb.ToString()); $out = $items -join ',' } else { $out = $sb.ToString() }
     $ord = [StringComparison]::Ordinal
+    if ($out.StartsWith('@String(', $ord) -and $out.EndsWith(')', $ord)) { return $out.Substring(8, $out.Length - 9) }
     if ($out.StartsWith('@ByteArray(', $ord) -and $out.EndsWith(')', $ord)) {
         $inner = $out.Substring(11, $out.Length - 12)
         # Qt turns the text into bytes with toLatin1 (a character above 255 becomes '?'), then UTF-8.
