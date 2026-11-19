@@ -494,11 +494,17 @@ function ConvertFrom-QtIniKey([string]$Key) {
 # INI keys ignore case on Windows) with '/' between section and key: "settings/profiles_directory";
 # keys in [General] have no section: "selected_profile".
 function Read-MO2Ini([string]$Path) {
-    $vals = @{}
+    # Qt parses [General] before the named sections, so a named section's value wins over the same key
+    # written as section\key under [General], whatever the order in the file.
+    $general = @{}
+    $named = @{}
     $section = ''
-    # FileShare.ReadWrite, so a running MO2 that holds the file open doesn't stop the read. UTF-8, and
-    # only a UTF-8 byte-order mark is dropped, as in Qt.
-    $fs = [System.IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
+    # Shared read, write and delete, so a running MO2 that holds the file open doesn't stop the read.
+    # Windows refuses to rename a file over one that is open (tested 2026-11-19, any sharing mode), so
+    # the file is read in one go and closed at once. UTF-8, and only a UTF-8 byte-order
+    # mark is dropped, as in Qt. Limits: a raw non-ASCII byte in a section or key name and a %-escape
+    # with a sign or 0x are read slightly differently from Qt; MO2 writes neither.
+    $fs = [System.IO.File]::Open($Path, 'Open', 'Read', [System.IO.FileShare]'ReadWrite, Delete')
     try { $ms = New-Object System.IO.MemoryStream; $fs.CopyTo($ms); $bytes = $ms.ToArray() } finally { $fs.Dispose() }
     $skip = $(if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { 3 } else { 0 })
     $data = (New-Object System.Text.UTF8Encoding($false)).GetString($bytes, $skip, $bytes.Length - $skip)
@@ -515,8 +521,12 @@ function Read-MO2Ini([string]$Path) {
         }
         if ($line.eq -lt 0) { continue }
         $k = (ConvertFrom-QtIniKey $t.Substring(0, $line.eq).TrimEnd(' ', "`t")).ToLowerInvariant()
-        $vals[$section + $k] = ConvertFrom-QtIniValue $t.Substring($line.eq + 1)
+        $target = $(if ($section) { $named } else { $general })
+        $target[$section + $k] = ConvertFrom-QtIniValue $t.Substring($line.eq + 1)
     }
+    $vals = @{}
+    foreach ($key in $general.Keys) { $vals[$key] = $general[$key] }
+    foreach ($key in $named.Keys) { $vals[$key] = $named[$key] }
     return $vals
 }
 

@@ -349,11 +349,13 @@ try {
     $iniK = New-File 'IniKeys\ModOrganizer.ini' ("[General]`r`nsettings\overwrite_directory=D:/o`r`n[Sett%69ngs]`r`nprofiles_directory=D:/p`r`n" +
                                                  "[%General]`r`nx=1`r`n")
     # Read while another program holds the file open for writing, as a running MO2 may.
-    $hold = [System.IO.File]::Open($iniK, 'Open', 'ReadWrite', 'ReadWrite')
+    $hold = [System.IO.File]::Open($iniK, 'Open', 'ReadWrite', [System.IO.FileShare]'ReadWrite, Delete')
     try { $vals = Read-MO2Ini $iniK } finally { $hold.Dispose() }
     Assert ($vals['settings/overwrite_directory'] -ceq 'D:/o') '[General] settings\key is the same key as [Settings] key'
     Assert ($vals['settings/profiles_directory'] -ceq 'D:/p') 'section names are unescaped (%69)'
     Assert ($vals['general/x'] -ceq '1') '[%General] is a real section named General'
+    $iniP = New-File 'IniPrec\ModOrganizer.ini' "[Settings]`r`nprofiles_directory=D:/A`r`n[General]`r`nsettings\profiles_directory=D:/B`r`n"
+    Assert ((Read-MO2Ini $iniP)['settings/profiles_directory'] -ceq 'D:/A') '[Settings] wins over [General] settings\key, as in Qt'
 
     # ---------------- 5e: MO2 folder at a drive root (\\ in the INI) is not taken for a UNC path
     Write-Host ''
