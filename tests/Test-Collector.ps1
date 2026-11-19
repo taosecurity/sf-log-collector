@@ -18,17 +18,20 @@ if (-not $Shell) { $Shell = (Get-Process -Id $PID).Path }
 # Resolve the name once, so the log shows the exact program that runs the collector. A name with a
 # slash or backslash is a path (made full, and it must be an .exe); a bare name is looked up on PATH,
 # as & does.
-if ($Shell -match '[\\/]') {
-    # Combine keeps a rooted path as it is and puts a relative one under the current folder.
-    $Shell = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine((Get-Location).ProviderPath, $Shell))
-    if (-not (Test-Path -LiteralPath $Shell -PathType Leaf) -or [System.IO.Path]::GetExtension($Shell) -ne '.exe') {
-        Write-Host "Shell '$Shell' is not an .exe file. Pass -Shell powershell, pwsh or the path of one." -ForegroundColor Red; exit 1
-    }
+$given = $Shell
+$usage = 'Pass -Shell powershell, pwsh or the path of one.'
+if ($Shell -match '[\\/:~]') {
+    # PowerShell's own resolver: ~, PowerShell drives and relative paths work as in any cmdlet.
+    try { $Shell = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Shell) }
+    catch { Write-Host "Shell '$given' is not a usable path ($($_.Exception.Message)). $usage" -ForegroundColor Red; exit 1 }
+    if (-not (Test-Path -LiteralPath $Shell -PathType Leaf)) { Write-Host "Shell '$Shell' not found. $usage" -ForegroundColor Red; exit 1 }
 } else {
-    $found = @(Get-Command -Name $Shell -CommandType Application -ErrorAction SilentlyContinue)
-    if ($found.Count -eq 0) { Write-Host "Shell '$Shell' not found on PATH. Pass -Shell powershell, pwsh or the path of one." -ForegroundColor Red; exit 1 }
+    # The name is taken literally (no wildcards) and looked up on PATH, as & does.
+    $found = @(Get-Command -Name ([System.Management.Automation.WildcardPattern]::Escape($Shell)) -CommandType Application -ErrorAction SilentlyContinue)
+    if ($found.Count -eq 0) { Write-Host "Shell '$given' not found on PATH. $usage" -ForegroundColor Red; exit 1 }
     $Shell = $found[0].Source
 }
+if ([System.IO.Path]::GetExtension($Shell) -ne '.exe') { Write-Host "Shell '$Shell' is not an .exe file. $usage" -ForegroundColor Red; exit 1 }
 $ShellEdition = (@(& $Shell -NoProfile -Command '$PSVersionTable.PSEdition; $PSVersionTable.PSVersion.ToString()') -join ' ').Trim()
 if ($LASTEXITCODE -ne 0 -or -not $ShellEdition) { Write-Host "Shell '$Shell' did not start (exit $LASTEXITCODE)." -ForegroundColor Red; exit 1 }
 $Collector = Join-Path (Split-Path $PSScriptRoot -Parent) 'Collect-StarfieldTestLogs.ps1'
