@@ -14,7 +14,14 @@
 param([string]$Shell = '')
 
 $ErrorActionPreference = 'Stop'
-if (-not $Shell) { $Shell = (Get-Process -Id $PID).Path }
+if (-not $Shell) {
+    # Default: the PowerShell running this test. A host such as the ISE isn't one to run the collector
+    # with, so then the matching console PowerShell is used.
+    $Shell = (Get-Process -Id $PID).Path
+    if ([System.IO.Path]::GetFileName($Shell) -notmatch '^(?i)(powershell|pwsh)\.exe$') {
+        $Shell = $(if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell' })
+    }
+}
 # Resolved once, so the log shows the exact program that runs the collector. Accepted, to keep this
 # simple: powershell or pwsh (with or without .exe, looked up on PATH), or the full path of
 # powershell.exe or pwsh.exe (backslashes or forward slashes).
@@ -24,10 +31,11 @@ $bare = $Shell -replace '(?i)\.exe$', ''
 if ($bare -eq 'powershell' -or $bare -eq 'pwsh') {
     $found = @(Get-Command -Name "$bare.exe" -CommandType Application -ErrorAction SilentlyContinue |
                Where-Object { [System.IO.Path]::GetExtension($_.Source) -eq '.exe' })
-    if ($found.Count -eq 0) { Write-Host "$bare.exe not found on PATH. $usage" -ForegroundColor Red; exit 1 }
+    if ($found.Count -eq 0) { Write-Host "Shell '$given' not found on PATH. $usage" -ForegroundColor Red; exit 1 }
     $Shell = $found[0].Source
 } elseif ($Shell -match '^([A-Za-z]:[\\/]|\\\\|//)' -and [System.IO.Path]::GetFileName($Shell) -match '^(?i)(powershell|pwsh)\.exe$') {
-    $Shell = $Shell -replace '/', '\'
+    try { $Shell = [System.IO.Path]::GetFullPath(($Shell -replace '/', '\')) }
+    catch { Write-Host "Shell '$given' is not a usable path. $usage" -ForegroundColor Red; exit 1 }
     $exists = $false
     try { $exists = Test-Path -LiteralPath $Shell -PathType Leaf -ErrorAction Stop } catch { }
     if (-not $exists) { Write-Host "Shell '$given' not found or not readable. $usage" -ForegroundColor Red; exit 1 }
@@ -35,7 +43,9 @@ if ($bare -eq 'powershell' -or $bare -eq 'pwsh') {
     Write-Host "Shell '$given' is not accepted. $usage" -ForegroundColor Red; exit 1
 }
 $ShellEdition = (@(& $Shell -NoProfile -Command '$PSVersionTable.PSEdition; $PSVersionTable.PSVersion.ToString()') -join ' ').Trim()
-if ($LASTEXITCODE -ne 0 -or -not $ShellEdition) { Write-Host "Shell '$Shell' did not start (exit $LASTEXITCODE)." -ForegroundColor Red; exit 1 }
+if ($LASTEXITCODE -ne 0 -or $ShellEdition -notmatch '^(Desktop|Core) \d') {
+    Write-Host "Shell '$Shell' did not start as PowerShell (exit $LASTEXITCODE, said '$ShellEdition')." -ForegroundColor Red; exit 1
+}
 $Collector = Join-Path (Split-Path $PSScriptRoot -Parent) 'Collect-StarfieldTestLogs.ps1'
 $Root = Join-Path ([System.IO.Path]::GetTempPath()) ('sflc-test-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $script:Failures = 0
