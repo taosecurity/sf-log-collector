@@ -300,7 +300,10 @@ try {
     Assert ((ConvertFrom-QtIniValue '@Invalid()') -ceq '') '@Invalid() is no value'
     Assert ((ConvertFrom-QtIniValue '\x40@foo') -ceq '@foo') 'escapes decoded before the @ forms'
     Assert ((ConvertFrom-QtIniValue '@ByteArray(\x4e00Team)') -ceq '?Team') '@ByteArray character above 255 becomes ? as in Qt'
-    Assert ((ConvertFrom-QtIniValue ('\x00ad@@foo')) -ceq ([string][char]0xAD + '@@foo')) 'leading-@ checks are ordinal'
+    # Compared ordinally: -ceq uses the culture, which ignores the soft hyphen.
+    Assert ([string]::Equals((ConvertFrom-QtIniValue '\x00ad@@foo'), ([string][char]0xAD + '@@foo'), [StringComparison]::Ordinal)) 'leading-@ checks are ordinal'
+    Assert ((ConvertFrom-QtIniValue 'a\x0041BCz') -ceq ('a' + [char]0x41BC + 'z')) '\x reads every hex digit, low 16 bits kept'
+    Assert ((ConvertFrom-QtIniValue 'a\101b') -ceq 'aAb') 'octal escape'
 
     # ---------------- 5e: MO2 folder at a drive root (\\ in the INI) is not taken for a UNC path
     Write-Host ''

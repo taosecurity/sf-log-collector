@@ -310,8 +310,9 @@ function Get-DefaultScreenshotDirs([string]$MyGames) {
 # Decodes one value the way Qt's QSettings (and so MO2 itself) reads its INI, in Qt's order:
 #   1. surrounding quotes go;
 #   2. escapes become characters: \\ \" \' \? \t \n \r \a \b \f \v (lowercase only, so \T in D:\Tools
-#      stays as typed), \x with up to 4 hex digits and \ooo; an unknown escape keeps its backslash
-#      (MO2 itself writes forward slashes and no escapes, so these only matter for hand edits);
+#      stays as typed), \x and \o with all the hex or octal digits that follow (low 16 bits kept);
+#      an unknown escape keeps its backslash. MO2 stores paths with forward slashes, but Qt still
+#      escapes quotes, control characters and sometimes non-ASCII text when it writes;
 #   3. then the leading-@ forms of the decoded text: @ByteArray(...) holds bytes (decoded as UTF-8),
 #      @Invalid() is no value, and @@ stands for a literal @.
 function ConvertFrom-QtIniValue([string]$Raw) {
@@ -332,13 +333,16 @@ function ConvertFrom-QtIniValue([string]$Raw) {
         if ($simple.ContainsKey($e)) { [void]$sb.Append($simple[$e]); $i += 2; continue }
         if ($e -ceq 'x') {
             $j = $i + 2
-            while ($j -lt $v.Length -and $j -lt $i + 6 -and [Uri]::IsHexDigit($v[$j])) { $j++ }
-            if ($j -gt $i + 2) { [void]$sb.Append([char][Convert]::ToInt32($v.Substring($i + 2, $j - $i - 2), 16)); $i = $j; continue }
+            # Like Qt: every hex digit that follows, keeping the low 16 bits.
+            $code = 0
+            while ($j -lt $v.Length -and [Uri]::IsHexDigit($v[$j])) { $code = (($code -shl 4) -bor [Convert]::ToInt32([string]$v[$j], 16)) -band 0xFFFF; $j++ }
+            if ($j -gt $i + 2) { [void]$sb.Append([char]$code); $i = $j; continue }
         }
         if ($e -match '^[0-7]$') {
             $j = $i + 1
-            while ($j -lt $v.Length -and $j -lt $i + 4 -and $v[$j] -match '[0-7]') { $j++ }
-            [void]$sb.Append([char][Convert]::ToInt32($v.Substring($i + 1, $j - $i - 1), 8)); $i = $j; continue
+            $code = 0
+            while ($j -lt $v.Length -and $v[$j] -match '[0-7]') { $code = (($code -shl 3) -bor [int][string]$v[$j]) -band 0xFFFF; $j++ }
+            [void]$sb.Append([char]$code); $i = $j; continue
         }
         [void]$sb.Append('\'); $i++
     }
@@ -764,8 +768,8 @@ try {
         try {
             $bytes = [System.Text.Encoding]::ASCII.GetBytes($Now.ToString('o', [Globalization.CultureInfo]::InvariantCulture))
             # OpenOrCreate rather than WriteAllText (FileMode.Create), which refuses a hidden file. The new
-            # time is written before the file is trimmed, so an existing marker is never emptied (a failed
-            # first write can leave an empty one, which the next run reports and replaces).
+            # time is written before the file is trimmed, so an existing marker is never left empty. A failed
+            # write can still leave it damaged; the next run then reports it and uses 12 hours.
             $fs = [System.IO.File]::Open($Marker, 'OpenOrCreate', 'Write', 'None')
             try { $fs.Write($bytes, 0, $bytes.Length); $fs.SetLength($bytes.Length) } finally { $fs.Dispose() }
         } catch {
