@@ -110,13 +110,15 @@ if ($env:USERPROFILE) {
     # The 8.3 short form (C:\Users\RICHAR~1) shows up in %TEMP% paths inside logs.
     $script:ShortPathNote = $null
     $fso = $null
+    $folder = $null
     try {
         $fso = New-Object -ComObject Scripting.FileSystemObject
-        $profForms += $fso.GetFolder($env:USERPROFILE).ShortPath.TrimEnd('\')
+        $folder = $fso.GetFolder($env:USERPROFILE)
+        $profForms += $folder.ShortPath.TrimEnd('\')
     } catch {
         $script:ShortPathNote = "could not get the short (8.3) form of the user folder, so only the long form is hidden: $($_.Exception.Message)"
     } finally {
-        if ($fso) { [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($fso) }
+        foreach ($com in @($folder, $fso)) { if ($com) { [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($com) } }
     }
     $alts = @($profForms | Select-Object -Unique | ForEach-Object { [regex]::Escape($_) }) -join '|'
     $script:ProfileRx = '(?i)(?:' + $alts + ')(?!\.?[\w~-])'
@@ -313,8 +315,15 @@ function ConvertFrom-QtIniValue([string]$Raw) {
     if ($v.Length -ge 2 -and $v.StartsWith('"') -and $v.EndsWith('"')) { $v = $v.Substring(1, $v.Length - 2) }
     $isBytes = $false
     if ($v.StartsWith('@ByteArray(') -and $v.EndsWith(')')) { $isBytes = $true; $v = $v.Substring(11, $v.Length - 12) }
-    $simple = @{ '\' = '\'; '"' = '"'; "'" = "'"; '?' = '?'; 't' = "`t"; 'n' = "`n"; 'r' = "`r"
-                 'a' = [string][char]7; 'b' = [string][char]8; 'f' = [string][char]12; 'v' = [string][char]11 }
+    # Qt's leading-@ forms: @@ is a literal @, @Invalid() is no value.
+    if ($v -ceq '@Invalid()') { return '' }
+    if ($v.StartsWith('@@')) { $v = $v.Substring(1) }
+    # Case-sensitive table: Qt knows only the lowercase escapes (\T in D:\Tools is not a tab).
+    $simple = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::Ordinal)
+    foreach ($p in @(@('\', '\'), @('"', '"'), @("'", "'"), @('?', '?'), @('t', "`t"), @('n', "`n"), @('r', "`r"),
+                     @('a', [string][char]7), @('b', [string][char]8), @('f', [string][char]12), @('v', [string][char]11))) {
+        $simple[$p[0]] = $p[1]
+    }
     $sb = New-Object System.Text.StringBuilder
     $i = 0
     while ($i -lt $v.Length) {
@@ -322,7 +331,7 @@ function ConvertFrom-QtIniValue([string]$Raw) {
         if ($c -ne '\' -or $i + 1 -ge $v.Length) { [void]$sb.Append($c); $i++; continue }
         $e = [string]$v[$i + 1]
         if ($simple.ContainsKey($e)) { [void]$sb.Append($simple[$e]); $i += 2; continue }
-        if ($e -eq 'x') {
+        if ($e -ceq 'x') {
             $j = $i + 2
             while ($j -lt $v.Length -and $j -lt $i + 6 -and [Uri]::IsHexDigit($v[$j])) { $j++ }
             if ($j -gt $i + 2) { [void]$sb.Append([char][Convert]::ToInt32($v.Substring($i + 2, $j - $i - 2), 16)); $i = $j; continue }
@@ -684,15 +693,20 @@ try {
 
     # Check now that the last-run marker can be written, so a warning about it lands in this zip.
     # (Opening an existing marker for writing doesn't change it; a new one is tried with a test file.)
+    # The real write after the zip opens the file the same way, so a hidden marker passes both.
+    $markerWarned = $false
     if (-not $DryRun) {
         try {
             if (Test-Path -LiteralPath $Marker) {
                 $probe = [System.IO.File]::Open($Marker, 'Open', 'Write', 'None'); $probe.Dispose()
             } else {
                 $testFile = Join-Path $OutDir ('.write-test-' + [guid]::NewGuid().ToString('N'))
-                [System.IO.File]::WriteAllText($testFile, ''); Remove-Item -LiteralPath $testFile -Force
+                [System.IO.File]::WriteAllText($testFile, '')
+                # A failed clean-up (antivirus holding the new file) is not a marker problem.
+                try { Remove-Item -LiteralPath $testFile -Force } catch { Write-Log "could not remove $testFile : $($_.Exception.Message)" }
             }
         } catch {
+            $markerWarned = $true
             Add-Warning "The last-run marker $Marker can't be written ($($_.Exception.Message)), so the next run will cover a wider window. Check the folder's permissions."
         }
     }
@@ -743,8 +757,16 @@ try {
 
     if (-not $DryRun) {
         # The zip is made: a marker that can't be written only means the next run's window is wider.
-        try { [System.IO.File]::WriteAllText($Marker, $Now.ToString('o', [Globalization.CultureInfo]::InvariantCulture)) }
-        catch { Add-Warning "Could not update the last-run marker ${Marker}: $($_.Exception.Message). Delete it, or check this folder's permissions." }
+        try {
+            $bytes = [System.Text.Encoding]::ASCII.GetBytes($Now.ToString('o', [Globalization.CultureInfo]::InvariantCulture))
+            # Open + SetLength rather than WriteAllText (FileMode.Create), which refuses a hidden file.
+            $mode = $(if (Test-Path -LiteralPath $Marker) { 'Open' } else { 'CreateNew' })
+            $fs = [System.IO.File]::Open($Marker, $mode, 'Write', 'None')
+            try { $fs.SetLength(0); $fs.Write($bytes, 0, $bytes.Length) } finally { $fs.Dispose() }
+        } catch {
+            $msg = "Could not update the last-run marker ${Marker}: $($_.Exception.Message). Delete it, or check this folder's permissions."
+            if ($markerWarned) { Write-Log $msg } else { Add-Warning $msg }
+        }
     }
 
     # ------------------------------------------------------------ summary

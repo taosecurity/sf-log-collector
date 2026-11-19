@@ -245,6 +245,23 @@ try {
     Assert ($r.code -eq 0) "exit code 0 (got $($r.code))"
     $z = Open-Zip $out5g
     Assert (@($z.manifest.warnings | Where-Object { $_ -match "can't be written" }).Count -eq 1) 'the zip carries the marker-write warning'
+    Assert (-not ($r.text -match 'Could not update the last-run marker')) 'no second warning for the same marker problem'
+
+    # ---------------- 5h: a hidden marker is read and updated
+    Write-Host ''
+    Write-Host 'Test 5h: hidden marker'
+    $out5h = Join-Path $Root 'out5h'
+    [void](New-Item -ItemType Directory -Path $out5h -Force)
+    $mk = Join-Path $out5h ('.last-run-' + $env:USERNAME)
+    [System.IO.File]::WriteAllText($mk, (Get-Date).AddHours(-3).ToString('o', [Globalization.CultureInfo]::InvariantCulture))
+    (Get-Item -LiteralPath $mk -Force).Attributes = 'Hidden'
+    $before = (Get-Content -LiteralPath $mk -Raw)
+    $r = Invoke-Collector ($common[3..($common.Count - 1)] + @('-NoPrompt', '-GamePath', (Join-Path $Root 'Game'), '-OutDir', $out5h))
+    Assert ($r.code -eq 0) "exit code 0 (got $($r.code))"
+    $z = Open-Zip $out5h
+    Assert (@($z.manifest.warnings | Where-Object { $_ -match 'marker' }).Count -eq 0) 'no marker warning'
+    Assert ((Get-Content -LiteralPath $mk -Raw) -ne $before) 'hidden marker updated'
+    Assert ($z.manifest.window.how -eq 'since last run') "window from the hidden marker ($($z.manifest.window.how))"
 
     # ---------------- 5f: Resolve-MO2Dir, loaded from the script (no run)
     Write-Host ''
@@ -268,6 +285,8 @@ try {
         @('Q:\MO2', '\\Profiles', '', 'Q:\Profiles'),
         @('Q:\MO2', '\\Mods\\Profiles', '', 'Q:\Mods\Profiles'),
         @('Q:\MO2', 'Q:profiles', '', 'Q:\profiles'),
+        @('Q:\MO2', 'Q:\Games\Tools\Xbox\Backup', '', 'Q:\Games\Tools\Xbox\Backup'),
+        @('Q:\MO2', '@@odd/profiles', '', 'Q:\MO2\@odd\profiles'),
         @('Q:\MO2', 'sub/profiles', '', 'Q:\MO2\sub\profiles'))
     foreach ($c in $cases) {
         $got = Resolve-MO2Dir $c[0] (ConvertFrom-QtIniValue $c[1]) $c[2]
