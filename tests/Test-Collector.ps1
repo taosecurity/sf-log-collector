@@ -246,6 +246,7 @@ try {
     $z = Open-Zip $out5g
     Assert (@($z.manifest.warnings | Where-Object { $_ -match "can't be written" }).Count -eq 1) 'the zip carries the marker-write warning'
     Assert (-not ($r.text -match 'Could not update the last-run marker')) 'no second warning for the same marker problem'
+    Assert (@($z.manifest.warnings | Where-Object { $_ -match "can't be written|Could not update the last-run marker" }).Count -eq 1) 'one marker-write warning in the manifest'
 
     # ---------------- 5h: a hidden marker is read and updated
     Write-Host ''
@@ -296,6 +297,10 @@ try {
     Assert ($prof -eq ([string][char]0xC9 + 'quipe')) "@ByteArray UTF-8 bytes decoded ($prof)"
     Assert ((ConvertFrom-QtIniValue '@ByteArray(Star Wars Genesis Compiler)') -eq 'Star Wars Genesis Compiler') '@ByteArray plain text'
     Assert ((ConvertFrom-QtIniValue 'D:/x\x00e9y') -eq ('D:/x' + [char]0xE9 + 'y')) '\xHHHH escape in a plain value'
+    Assert ((ConvertFrom-QtIniValue '@ByteArray(@@odd)') -ceq '@@odd') '@@ inside @ByteArray stays literal'
+    Assert ((ConvertFrom-QtIniValue '@ByteArray(@Invalid())') -ceq '@Invalid()') '@Invalid() inside @ByteArray stays literal'
+    Assert ((ConvertFrom-QtIniValue '@Invalid()') -ceq '') '@Invalid() is no value'
+    Assert ((ConvertFrom-QtIniValue '\x40@foo') -ceq '@foo') 'escapes decoded before the @ forms'
 
     # ---------------- 5e: MO2 folder at a drive root (\\ in the INI) is not taken for a UNC path
     Write-Host ''

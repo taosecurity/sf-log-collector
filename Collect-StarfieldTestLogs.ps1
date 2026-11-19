@@ -307,17 +307,15 @@ function Get-DefaultScreenshotDirs([string]$MyGames) {
     return $dirs
 }
 
-# Decodes one value the way Qt's QSettings (and so MO2 itself) reads its INI: surrounding quotes go,
-# escapes \\ \" \t \n \r \a \b \f \v \? \' \xHHHH and \ooo become characters (an unknown escape keeps its
-# backslash), and @ByteArray(...) holds bytes, decoded as UTF-8.
+# Decodes one value the way Qt's QSettings (and so MO2 itself) reads its INI, in Qt's order:
+#   1. surrounding quotes go;
+#   2. escapes become characters: \\ \" \' \? \t \n \r \a \b \f \v (lowercase only, so \T in D:\Tools
+#      stays as typed), \xHHHH and \ooo; an unknown escape keeps its backslash;
+#   3. then the leading-@ forms of the decoded text: @ByteArray(...) holds bytes (decoded as UTF-8),
+#      @Invalid() is no value, and @@ stands for a literal @.
 function ConvertFrom-QtIniValue([string]$Raw) {
     $v = $Raw.Trim()
     if ($v.Length -ge 2 -and $v.StartsWith('"') -and $v.EndsWith('"')) { $v = $v.Substring(1, $v.Length - 2) }
-    $isBytes = $false
-    if ($v.StartsWith('@ByteArray(') -and $v.EndsWith(')')) { $isBytes = $true; $v = $v.Substring(11, $v.Length - 12) }
-    # Qt's leading-@ forms: @@ is a literal @, @Invalid() is no value.
-    if ($v -ceq '@Invalid()') { return '' }
-    if ($v.StartsWith('@@')) { $v = $v.Substring(1) }
     # Case-sensitive table: Qt knows only the lowercase escapes (\T in D:\Tools is not a tab).
     $simple = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::Ordinal)
     foreach ($p in @(@('\', '\'), @('"', '"'), @("'", "'"), @('?', '?'), @('t', "`t"), @('n', "`n"), @('r', "`r"),
@@ -344,10 +342,13 @@ function ConvertFrom-QtIniValue([string]$Raw) {
         [void]$sb.Append('\'); $i++
     }
     $out = $sb.ToString()
-    if ($isBytes -and -not ($out.ToCharArray() | Where-Object { [int]$_ -gt 255 })) {
-        $bytes = [byte[]]@($out.ToCharArray() | ForEach-Object { [byte][int]$_ })
-        $out = [System.Text.Encoding]::UTF8.GetString($bytes)
+    if ($out.StartsWith('@ByteArray(') -and $out.EndsWith(')')) {
+        $inner = $out.Substring(11, $out.Length - 12)
+        if ($inner.ToCharArray() | Where-Object { [int]$_ -gt 255 }) { return $inner }
+        return [System.Text.Encoding]::UTF8.GetString([byte[]]@($inner.ToCharArray() | ForEach-Object { [byte][int]$_ }))
     }
+    if ($out -ceq '@Invalid()') { return '' }
+    if ($out.StartsWith('@@')) { return $out.Substring(1) }
     return $out
 }
 
@@ -759,10 +760,10 @@ try {
         # The zip is made: a marker that can't be written only means the next run's window is wider.
         try {
             $bytes = [System.Text.Encoding]::ASCII.GetBytes($Now.ToString('o', [Globalization.CultureInfo]::InvariantCulture))
-            # Open + SetLength rather than WriteAllText (FileMode.Create), which refuses a hidden file.
-            $mode = $(if (Test-Path -LiteralPath $Marker) { 'Open' } else { 'CreateNew' })
-            $fs = [System.IO.File]::Open($Marker, $mode, 'Write', 'None')
-            try { $fs.SetLength(0); $fs.Write($bytes, 0, $bytes.Length) } finally { $fs.Dispose() }
+            # OpenOrCreate rather than WriteAllText (FileMode.Create), which refuses a hidden file. The new
+            # time is written before the file is trimmed, so a failed write never leaves it empty.
+            $fs = [System.IO.File]::Open($Marker, 'OpenOrCreate', 'Write', 'None')
+            try { $fs.Write($bytes, 0, $bytes.Length); $fs.SetLength($bytes.Length) } finally { $fs.Dispose() }
         } catch {
             $msg = "Could not update the last-run marker ${Marker}: $($_.Exception.Message). Delete it, or check this folder's permissions."
             if ($markerWarned) { Write-Log $msg } else { Add-Warning $msg }
