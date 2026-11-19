@@ -14,6 +14,9 @@ param([string]$Shell = '')
 
 $ErrorActionPreference = 'Stop'
 if (-not $Shell) { $Shell = (Get-Process -Id $PID).Path }
+# Resolve the name once, so the log shows the exact program that ran the collector.
+$Shell = (Get-Command $Shell -CommandType Application | Select-Object -First 1).Source
+$ShellEdition = (@(& $Shell -NoProfile -Command '$PSVersionTable.PSEdition; $PSVersionTable.PSVersion.ToString()') -join ' ').Trim()
 $Collector = Join-Path (Split-Path $PSScriptRoot -Parent) 'Collect-StarfieldTestLogs.ps1'
 $Root = Join-Path ([System.IO.Path]::GetTempPath()) ('sflc-test-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $script:Failures = 0
@@ -49,7 +52,8 @@ function Open-Zip([string]$Dir) {
 
 try {
     Write-Host "Collector: $Collector"
-    Write-Host "Shell    : $Shell"
+    Write-Host "Shell    : $Shell ($ShellEdition)"
+    Write-Host "Harness  : PowerShell $($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)"
     Write-Host "Temp     : $Root"
 
     # ---------------- fake setup

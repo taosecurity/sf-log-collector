@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: MIT
 # SPDX-FileCopyrightText: 2026 Richard Bejtlich
 #
-# Runs the tests in Windows PowerShell 5.1 and PowerShell 7. On a version tag (v2.0.0), builds the
-# release zip with its SHA-256 checksum and publishes a GitHub release with both files.
+# Runs the tests and the release-zip build in Windows PowerShell 5.1 and in PowerShell 7, each leg
+# entirely in its own PowerShell. On a version tag (v2.0.0), builds the release zip with its SHA-256
+# checksum and publishes a GitHub release with both files.
 name: tests
 
 on:
@@ -24,13 +25,23 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
-      # A step's shell can't come from the matrix: the harness runs in pwsh and starts the collector in
-      # the matrix's PowerShell (powershell = Windows PowerShell 5.1, pwsh = PowerShell 7).
-      - name: Tests
-        shell: pwsh
-        run: ./tests/Test-Collector.ps1 -Shell ${{ matrix.shell }}
-      - name: Release zip builds (Windows PowerShell 5.1)
+      # A step's shell can't come from the matrix, so each leg has its own pair of steps. The harness, its
+      # in-process checks and the collector it starts all run in that leg's PowerShell.
+      - name: Tests (Windows PowerShell 5.1)
+        if: matrix.shell == 'powershell'
         shell: powershell
+        run: ./tests/Test-Collector.ps1 -Shell powershell
+      - name: Release zip builds (Windows PowerShell 5.1)
+        if: matrix.shell == 'powershell'
+        shell: powershell
+        run: ./build_release.ps1
+      - name: Tests (PowerShell 7)
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
+        run: ./tests/Test-Collector.ps1 -Shell pwsh
+      - name: Release zip builds (PowerShell 7, as the release job)
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
         run: ./build_release.ps1
 
   release:
