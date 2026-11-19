@@ -310,18 +310,20 @@ function Get-DefaultScreenshotDirs([string]$MyGames) {
 # Decodes one value the way Qt's QSettings (and so MO2 itself) reads its INI. A port of the parts of
 # Qt 5.15's QSettingsPrivate::iniUnescapedStringList and stringToVariant (qsettings.cpp, checked
 # 2026-11-19) that MO2's folder settings can use. Not handled, on purpose (MO2 never writes them for
-# folders): @Variant/@DateTime binary values (read as ""), and a quoted value running over lines.
+# folders): @Variant/@DateTime binary values, which are read as "".
 #   - leading spaces are skipped; trailing spaces are cut unless the value was quoted (or ends in a
 #     lone backslash);
 #   - a double quote toggles quoting anywhere and is removed; a comma outside quotes makes a list,
 #     which MO2 reads as an empty string (so the default folder is used);
-#   - a backslash at the end of a line continues the value on the next line (Read-MO2Ini joins them);
+#   - a backslash + line break (a continued line, kept by Split-QtIniLines) is dropped;
 #   - escapes \a \b \f \n \r \t \v \" \? \' \\ (lowercase only); \x plus every hex digit after it, and
 #     \ plus octal digits, keep the low 16 bits; \x with no hex digit, an unknown escape (\M in
 #     D:\Mods) and a lone trailing backslash are dropped entirely, as Qt drops them;
 #   - then the decoded text's @ forms: @ByteArray(...) holds bytes (Latin-1, so a character above 255
-#     becomes '?'; MO2 reads them as UTF-8), @String(...), @Invalid() and the typed forms @Variant,
-#     @DateTime, @Rect, @Size and @Point are no string (""), and @@ is a literal @.
+#     becomes '?'; MO2 reads them as UTF-8), @String(...), @Invalid() is no value (""), @Rect, @Size
+#     and @Point are no string ("") when they have 4, 2 and 2 space-separated arguments (otherwise the
+#     text stays), and @@ is a literal @.
+# Lines, comments and continuations are Split-QtIniLines' job (Qt's readIniLine).
 # MO2 stores paths with forward slashes, so the escapes matter for quotes, @ and hand edits.
 function ConvertFrom-QtIniValue([string]$Raw) {
     $codes = New-Object 'System.Collections.Generic.Dictionary[char,char]'
@@ -394,7 +396,8 @@ function ConvertFrom-QtIniValue([string]$Raw) {
     # @Variant/@DateTime hold Qt's binary data stream, which this tool doesn't decode: read as "".
     foreach ($typed in @(@('@Rect(', 4), @('@Size(', 2), @('@Point(', 2))) {
         if ($out.StartsWith($typed[0], $ord) -and $out.EndsWith(')', $ord)) {
-            $args2 = @($out.Substring($typed[0].Length, $out.Length - $typed[0].Length - 1).Split(' ') | Where-Object { $_ })
+            # Qt's splitArgs splits on each single space and keeps empty items.
+            $args2 = $out.Substring($typed[0].Length, $out.Length - $typed[0].Length - 1).Split(' ')
             if ($args2.Count -eq $typed[1]) { return '' }
             return $out
         }
@@ -413,33 +416,73 @@ function ConvertFrom-QtIniValue([string]$Raw) {
     return $out
 }
 
-# Reads the few ModOrganizer.ini settings we need.
+# Splits INI text into logical lines the way Qt 5.15's QConfFileSettingsPrivate::readIniLine does
+# (qsettings.cpp, checked 2026-11-19). Returns @{ text; eq } per line, eq = index of the first '='
+# outside quotes (or -1). Rules: leading spaces, tabs and line breaks are skipped; a ';' first on a line
+# makes the line a comment, and an unquoted ';' later ends the line; a backslash takes the next character
+# with it (so backslash + line break continues the line); a line break inside quotes doesn't end it.
+function Split-QtIniLines([string]$Data) {
+    $out = New-Object System.Collections.Generic.List[object]
+    $len = $Data.Length
+    $isSpace = { param($c) $c -eq ' ' -or $c -eq "`t" -or $c -eq "`n" -or $c -eq "`r" }
+    $pos = 0
+    while ($true) {
+        $ls = $pos
+        while ($ls -lt $len -and (& $isSpace $Data[$ls])) { $ls++ }
+        $i = $ls; $inQ = $false; $eq = -1
+        while ($i -lt $len) {
+            $ch = $Data[$i]
+            if ($ch -ne '=' -and $ch -ne "`n" -and $ch -ne "`r" -and $ch -ne '\' -and $ch -ne '"' -and $ch -ne ';') { $i++; continue }
+            $i++
+            if ($ch -eq '=') { if (-not $inQ -and $eq -eq -1) { $eq = $i - 1 } }
+            elseif ($ch -eq "`n" -or $ch -eq "`r") {
+                if ($i -eq $ls + 1) { $ls++ } elseif (-not $inQ) { $i--; break }
+            }
+            elseif ($ch -eq '\') {
+                if ($i -lt $len) {
+                    $c1 = $Data[$i]; $i++
+                    if ($i -lt $len) {
+                        $c2 = $Data[$i]
+                        if (($c1 -eq "`n" -and $c2 -eq "`r") -or ($c1 -eq "`r" -and $c2 -eq "`n")) { $i++ }
+                    }
+                }
+            }
+            elseif ($ch -eq '"') { $inQ = -not $inQ }
+            else {
+                # ';'
+                if ($i -eq $ls + 1) {
+                    while ($i -lt $len -and $Data[$i] -ne "`n" -and $Data[$i] -ne "`r") { $i++ }
+                    while ($i -lt $len -and (& $isSpace $Data[$i])) { $i++ }
+                    $ls = $i
+                } elseif (-not $inQ) { $i--; break }
+            }
+        }
+        $pos = $i
+        if ($i - $ls -le 0) { break }
+        $out.Add(@{ text = $Data.Substring($ls, $i - $ls); eq = $(if ($eq -ge 0) { $eq - $ls } else { -1 }) })
+    }
+    return $out
+}
+
+# Reads ModOrganizer.ini. Keys are stored as "section\key" (settings\profiles_directory) and, for
+# [General], also as the bare key (selected_profile).
 function Read-MO2Ini([string]$Path) {
-    # Keys are stored as "section\key" (settings\profiles_directory) and, for [General], also as the bare key.
     $vals = @{}
     $section = ''
-    # MO2 (Qt) writes UTF-8; Windows PowerShell 5.1 would read it as ANSI without -Encoding.
-    # A line ending in an odd number of backslashes continues on the next line (Qt's readIniLine);
-    # the backslash and line break stay in the text, and the decoder drops them as Qt does.
-    $raw = @(Get-Content -LiteralPath $Path -Encoding UTF8)
-    $lines = New-Object System.Collections.Generic.List[string]
-    for ($r = 0; $r -lt $raw.Count; $r++) {
-        $joined = [string]$raw[$r]
-        # A comment line (';' or '#') never continues: Qt skips it to the line break.
-        $isComment = $joined.TrimStart() -match '^[;#]'
-        while (-not $isComment -and $r + 1 -lt $raw.Count -and ($joined.Length - $joined.TrimEnd('\').Length) % 2 -eq 1) {
-            $r++; $joined = $joined + "`n" + [string]$raw[$r]
+    # MO2 (Qt) writes UTF-8; ReadAllText drops a byte-order mark as Qt does.
+    $data = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+    foreach ($line in Split-QtIniLines $data) {
+        $t = $line.text
+        if ($t.StartsWith('[')) {
+            $close = $t.IndexOf(']')
+            $name = $(if ($close -ge 0) { $t.Substring(1, $close - 1) } else { $t.Substring(1) }).Trim()
+            $section = $(if ($name -ieq 'general') { '' } else { $name.ToLowerInvariant() })
+            continue
         }
-        $lines.Add($joined)
-    }
-    foreach ($line in $lines) {
-        if ($line -match '^\s*\[([^\]]+)\]\s*$') { $section = $Matches[1].Trim().ToLowerInvariant(); continue }
-        if ($line -match '(?s)^\s*([A-Za-z_\\]+)\s*=\s*(.*)$') {
-            $k = $Matches[1].ToLowerInvariant()
-            $v = ConvertFrom-QtIniValue $Matches[2]
-            if ($section) { $vals["$section\$k"] = $v }
-            if (-not $section -or $section -eq 'general') { $vals[$k] = $v }
-        }
+        if ($line.eq -lt 0) { continue }
+        $k = $t.Substring(0, $line.eq).Trim().ToLowerInvariant()
+        $v = ConvertFrom-QtIniValue $t.Substring($line.eq + 1)
+        if ($section) { $vals["$section\$k"] = $v } else { $vals[$k] = $v }
     }
     return $vals
 }
