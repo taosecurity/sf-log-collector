@@ -14,9 +14,15 @@ param([string]$Shell = '')
 
 $ErrorActionPreference = 'Stop'
 if (-not $Shell) { $Shell = (Get-Process -Id $PID).Path }
-# Resolve the name once, so the log shows the exact program that ran the collector.
-$Shell = (Get-Command $Shell -CommandType Application | Select-Object -First 1).Source
+# Resolve the name once, so the log shows the exact program that ran the collector. A path is kept as
+# given (Get-Command would read [ ] in it as wildcards); a bare name is looked up on PATH.
+if (-not (Test-Path -LiteralPath $Shell -PathType Leaf)) {
+    $found = @(Get-Command -Name $Shell -CommandType Application -ErrorAction SilentlyContinue)
+    if ($found.Count -eq 0) { Write-Host "Shell '$Shell' not found. Pass -Shell powershell, pwsh or a full path." -ForegroundColor Red; exit 1 }
+    $Shell = $found[0].Source
+}
 $ShellEdition = (@(& $Shell -NoProfile -Command '$PSVersionTable.PSEdition; $PSVersionTable.PSVersion.ToString()') -join ' ').Trim()
+if ($LASTEXITCODE -ne 0 -or -not $ShellEdition) { Write-Host "Shell '$Shell' did not start (exit $LASTEXITCODE)." -ForegroundColor Red; exit 1 }
 $Collector = Join-Path (Split-Path $PSScriptRoot -Parent) 'Collect-StarfieldTestLogs.ps1'
 $Root = Join-Path ([System.IO.Path]::GetTempPath()) ('sflc-test-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $script:Failures = 0
