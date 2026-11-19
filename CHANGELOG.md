@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.0.0 (unreleased)
+## 2.0.0 (2026-11-19)
 
 First public release. Versions 1.0.0 to 1.1.1 were private builds.
 
