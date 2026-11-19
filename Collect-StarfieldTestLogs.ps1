@@ -318,7 +318,10 @@ try {
     # .NET file calls don't follow PowerShell's current folder: make every path option a full path.
     function Resolve-Full([string]$P) {
         if (-not $P) { return $P }
-        return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($P)
+        # A drive that doesn't exist (E:\ on a PC without E:) is left as typed, so the usual
+        # "not found" warning names it instead of an error stopping the run.
+        try { return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($P) }
+        catch { Write-Log "cannot resolve path ${P}: $($_.Exception.Message)"; return $P }
     }
     $SavesDir = Resolve-Full $SavesDir; $GamePath = Resolve-Full $GamePath; $MO2Path = Resolve-Full $MO2Path
     $VortexExportDir = Resolve-Full $VortexExportDir; $DownloadsDir = Resolve-Full $DownloadsDir

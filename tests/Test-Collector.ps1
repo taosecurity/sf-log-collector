@@ -170,6 +170,25 @@ try {
     } finally { Pop-Location }
     Assert ($r.code -eq 0) "exit code 0 (got $($r.code))"
     Assert (@(Get-ChildItem -LiteralPath (Join-Path $Root 'out4') -Filter '*.zip' -ErrorAction SilentlyContinue).Count -eq 1) 'zip in the relative out folder'
+
+    # ---------------- 5: -GamePath on a drive that doesn't exist only warns
+    Write-Host ''
+    Write-Host 'Test 5: -GamePath on a missing drive'
+    $free = @([char[]]([int][char]'Q'..[int][char]'Z') | Where-Object { -not (Test-Path "${_}:\") })[0]
+    $out5 = Join-Path $Root 'out5'
+    $r = Invoke-Collector ($common + @('-GamePath', "${free}:\NoSuchGame", '-OutDir', $out5))
+    Assert ($r.code -eq 0) "exit code 0 (got $($r.code))"
+    $z = Open-Zip $out5
+    Assert (@($z.manifest.warnings | Where-Object { $_ -match 'No Starfield.exe in -GamePath' }).Count -eq 1) 'warns about the missing drive'
+
+    # ---------------- 6: the launcher passes the exit code on
+    Write-Host ''
+    Write-Host 'Test 6: .cmd launcher'
+    $cmd = Join-Path (Split-Path $PSScriptRoot -Parent) 'Collect-StarfieldTestLogs.cmd'
+    $out6 = Join-Path $Root 'out6'
+    $null = cmd.exe /c "echo.| `"$cmd`" -NoPrompt -Hours 1 -MyGamesDir `"$(Join-Path $Root 'MyGames')`" -OutDir `"$out6`" >nul 2>&1"
+    Assert ($LASTEXITCODE -eq 0) "launcher exit code 0 (got $LASTEXITCODE)"
+    Assert (@(Get-ChildItem -LiteralPath $out6 -Filter '*.zip' -ErrorAction SilentlyContinue).Count -eq 1) 'launcher made a zip'
 } finally {
     Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue
 }
