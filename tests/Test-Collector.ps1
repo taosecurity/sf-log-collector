@@ -8,25 +8,26 @@
     screenshots, runs the collector with -NoPrompt, and checks the zip. It needs no game.
     Exit code 0 = all passed, 1 = a check failed.
 .PARAMETER Shell
-    The PowerShell to run the collector with: powershell (5.1), pwsh (7), or the full path of a
-    PowerShell .exe. Default: the PowerShell running this test.
+    The PowerShell to run the collector with: powershell (5.1) or pwsh (7), with or without .exe, or
+    the full path of powershell.exe or pwsh.exe. Default: the PowerShell running this test.
 #>
 param([string]$Shell = '')
 
 $ErrorActionPreference = 'Stop'
 if (-not $Shell) { $Shell = (Get-Process -Id $PID).Path }
-# Resolve the name once, so the log shows the exact program that runs the collector. A name with a
-# slash or backslash is a path (made full, and it must be an .exe); a bare name is looked up on PATH,
-# as & does.
-# Only three forms are accepted, to keep this simple: powershell, pwsh, or the full path of an .exe.
+# Resolved once, so the log shows the exact program that runs the collector. Accepted, to keep this
+# simple: powershell or pwsh (with or without .exe, looked up on PATH), or the full path of
+# powershell.exe or pwsh.exe (backslashes or forward slashes).
 $given = $Shell
-$usage = 'Pass -Shell powershell, pwsh or the full path of a PowerShell .exe.'
-if ($Shell -eq 'powershell' -or $Shell -eq 'pwsh') {
-    $found = @(Get-Command -Name "$Shell.exe" -CommandType Application -ErrorAction SilentlyContinue |
+$usage = 'Pass -Shell powershell, pwsh or the full path of powershell.exe or pwsh.exe.'
+$bare = $Shell -replace '(?i)\.exe$', ''
+if ($bare -eq 'powershell' -or $bare -eq 'pwsh') {
+    $found = @(Get-Command -Name "$bare.exe" -CommandType Application -ErrorAction SilentlyContinue |
                Where-Object { [System.IO.Path]::GetExtension($_.Source) -eq '.exe' })
-    if ($found.Count -eq 0) { Write-Host "$Shell.exe not found on PATH. $usage" -ForegroundColor Red; exit 1 }
+    if ($found.Count -eq 0) { Write-Host "$bare.exe not found on PATH. $usage" -ForegroundColor Red; exit 1 }
     $Shell = $found[0].Source
-} elseif ($Shell -match '^([A-Za-z]:\\|\\\\)' -and [System.IO.Path]::GetExtension($Shell) -eq '.exe') {
+} elseif ($Shell -match '^([A-Za-z]:[\\/]|\\\\|//)' -and [System.IO.Path]::GetFileName($Shell) -match '^(?i)(powershell|pwsh)\.exe$') {
+    $Shell = $Shell -replace '/', '\'
     $exists = $false
     try { $exists = Test-Path -LiteralPath $Shell -PathType Leaf -ErrorAction Stop } catch { }
     if (-not $exists) { Write-Host "Shell '$given' not found or not readable. $usage" -ForegroundColor Red; exit 1 }
