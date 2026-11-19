@@ -1,0 +1,4 @@
+dist/
+build/
+StarfieldLogs-*.zip
+*.log
