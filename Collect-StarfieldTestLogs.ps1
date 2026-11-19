@@ -307,8 +307,10 @@ function Get-DefaultScreenshotDirs([string]$MyGames) {
     return $dirs
 }
 
-# Decodes one value the way Qt's QSettings (and so MO2 itself) reads its INI. A port of Qt 5.15's
-# QSettingsPrivate::iniUnescapedStringList and stringToVariant (qsettings.cpp), checked 2026-11-19:
+# Decodes one value the way Qt's QSettings (and so MO2 itself) reads its INI. A port of the parts of
+# Qt 5.15's QSettingsPrivate::iniUnescapedStringList and stringToVariant (qsettings.cpp, checked
+# 2026-11-19) that MO2's folder settings can use. Not handled, on purpose (MO2 never writes them for
+# folders): @Variant/@DateTime binary values (read as ""), and a quoted value running over lines.
 #   - leading spaces are skipped; trailing spaces are cut unless the value was quoted (or ends in a
 #     lone backslash);
 #   - a double quote toggles quoting anywhere and is removed; a comma outside quotes makes a list,
@@ -387,8 +389,17 @@ function ConvertFrom-QtIniValue([string]$Raw) {
     $out = $sb.ToString()
     $ord = [StringComparison]::Ordinal
     if ($out.StartsWith('@String(', $ord) -and $out.EndsWith(')', $ord)) { return $out.Substring(8, $out.Length - 9) }
-    # Qt's other typed forms are not strings: MO2 reads them as "".
-    foreach ($typed in '@Variant(', '@DateTime(', '@Rect(', '@Size(', '@Point(') {
+    # Typed forms. @Rect/@Size/@Point become non-strings ("") only with the right number of
+    # space-separated arguments (4, 2, 2), as in Qt; otherwise Qt keeps the text.
+    # @Variant/@DateTime hold Qt's binary data stream, which this tool doesn't decode: read as "".
+    foreach ($typed in @(@('@Rect(', 4), @('@Size(', 2), @('@Point(', 2))) {
+        if ($out.StartsWith($typed[0], $ord) -and $out.EndsWith(')', $ord)) {
+            $args2 = @($out.Substring($typed[0].Length, $out.Length - $typed[0].Length - 1).Split(' ') | Where-Object { $_ })
+            if ($args2.Count -eq $typed[1]) { return '' }
+            return $out
+        }
+    }
+    foreach ($typed in '@Variant(', '@DateTime(') {
         if ($out.StartsWith($typed, $ord) -and $out.EndsWith(')', $ord)) { return '' }
     }
     if ($out.StartsWith('@ByteArray(', $ord) -and $out.EndsWith(')', $ord)) {
@@ -414,7 +425,9 @@ function Read-MO2Ini([string]$Path) {
     $lines = New-Object System.Collections.Generic.List[string]
     for ($r = 0; $r -lt $raw.Count; $r++) {
         $joined = [string]$raw[$r]
-        while ($r + 1 -lt $raw.Count -and ($joined.Length - $joined.TrimEnd('\').Length) % 2 -eq 1) {
+        # A comment line (';' or '#') never continues: Qt skips it to the line break.
+        $isComment = $joined.TrimStart() -match '^[;#]'
+        while (-not $isComment -and $r + 1 -lt $raw.Count -and ($joined.Length - $joined.TrimEnd('\').Length) % 2 -eq 1) {
             $r++; $joined = $joined + "`n" + [string]$raw[$r]
         }
         $lines.Add($joined)

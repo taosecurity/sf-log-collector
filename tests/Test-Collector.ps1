@@ -316,11 +316,14 @@ try {
     Assert ((ConvertFrom-QtIniValue 'a, b') -ceq '') 'an unquoted comma makes a list, which MO2 reads as ""'
     Assert ((ConvertFrom-QtIniValue 'abc,') -ceq '') 'a trailing comma makes a list too'
     Assert ((ConvertFrom-QtIniValue 'abc  \') -ceq 'abc  ') 'a trailing backslash keeps the spaces before it'
-    Assert ((ConvertFrom-QtIniValue '@Variant(\0\0\0\x7f)') -ceq '') '@Variant(...) is not a string'
+    Assert ((ConvertFrom-QtIniValue '@Variant(\0\0\0\x7f)') -ceq '') '@Variant(...) is read as ""'
+    Assert ((ConvertFrom-QtIniValue '@Point(1 2)') -ceq '') '@Point with 2 arguments is not a string'
+    Assert ((ConvertFrom-QtIniValue '@Point(D:/x)') -ceq '@Point(D:/x)') '@Point with the wrong argument count stays text, as in Qt'
+    Assert ((ConvertFrom-QtIniValue '@Rect(1 2 3 4)') -ceq '') '@Rect with 4 arguments is not a string'
     # Read-MO2Ini joins a line that ends in a backslash with the next one, as Qt does.
     $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Read-MO2Ini' }, $true)
     . ([scriptblock]::Create($fn.Extent.Text))
-    $iniC = New-File 'IniCont\ModOrganizer.ini' "[General]`r`nselected_profile=@ByteArray(Test)`r`n[Settings]`r`nprofiles_directory=D:/Mods/x\`r`nmod_directory=E:/m`r`noverwrite_directory=D:/ow`r`n"
+    $iniC = New-File 'IniCont\ModOrganizer.ini' "[General]`r`nselected_profile=@ByteArray(Test)`r`n[Settings]`r`nprofiles_directory=D:/Mods/x\`r`nmod_directory=E:/m`r`n;old D:\Mods\`r`noverwrite_directory=D:/ow`r`n"
     $vals = Read-MO2Ini $iniC
     Assert ($vals['settings\profiles_directory'] -ceq 'D:/Mods/xmod_directory=E:/m') "continued line joined as Qt reads it ($($vals['settings\profiles_directory']))"
     Assert (-not $vals.ContainsKey('settings\mod_directory')) 'the continued line is not a key of its own'
