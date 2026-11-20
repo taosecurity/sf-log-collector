@@ -1,8 +1,66 @@
 # sf-log-collector
 
-When a Starfield mod misbehaves, its author usually asks for "your logs". Those are spread over five or six
-folders, and some of them only matter if they changed during the session that went wrong. **sf-log-collector
-gathers them into one zip with a single double-click**, so you can attach that one file to a bug report.
+sf-log-collector gathers your Starfield logs into one zip with a single double-click, so you can attach that one
+file to a bug report. When a mod misbehaves, its author usually asks for "your logs". Those are spread over five or
+six folders, and some of them only matter if they changed during the session that went wrong.
+
+Download the latest zip from [Releases](https://github.com/taosecurity/sf-log-collector/releases), unzip it, quit
+Starfield after playing, and double-click:
+
+```
+Collect-StarfieldTestLogs.cmd
+```
+
+For AI assistants: step-by-step instructions are in [AGENTS.md](AGENTS.md).
+
+## Example
+
+This is a real run on a made-up test setup with two made-up mods and a crash log. Only the zip's folder is changed,
+to the default one on your PC:
+
+```
+> powershell -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -Note "quest stuck at step 3" -Hours 2 -IncludeSaves
+
+Starfield log collector 2.0.0
+
+Collecting files changed last 2 hours (2026-11-20 13:36)
+  ! Crash log found! (1 new log(s) in SFSE\Crashlogs)
+
+Done.
+  Package : C:\Users\<you>\Documents\StarfieldLogs\StarfieldLogs-20261120-153652-quest-stuck-at-step-3.zip
+  Size    : 0.0 MB, 12 files
+  Contents: papyrus 3, gameIni 2, sfseLogs 1, crashLogger 1, pluginsTxt 1, pluginIni 1, consoleTranscripts 1, screenshots 1, saves 1
+
+Warnings:
+  - Crash log found! (1 new log(s) in SFSE\Crashlogs)
+
+Send this zip to whoever asked for your logs. Look inside first if you share it in public.
+```
+
+The zip from that run holds these files:
+
+```
+collector-log.txt
+manifest.json
+appdata\plugins.txt
+docs\StarfieldCustom.ini
+docs\StarfieldPrefs.ini
+docs\Logs\Script\Papyrus.0.log
+docs\Logs\Script\Papyrus.1.log
+docs\Logs\Script\User\MyMod.0.log
+docs\SFSE\Crashlogs\crash-2026-11-20.log
+docs\SFSE\Logs\sfse.txt
+downloads\sfconsole_20261120.txt
+game\Data\SFSE\Plugins\NewModA.ini
+saves\Save1_ABCD1234_000102_20261120100000_1_2.sfs
+screenshots\a.png
+```
+
+`manifest.json` and `collector-log.txt` describe the run and aren't counted in the 12 files. When you double-click
+the `.cmd` file instead, it asks what you tested and whether to add saves, and it waits for a key press at the end
+so you can read the result.
+
+What it does and doesn't do:
 
 - It collects the Papyrus script logs, SFSE and crash logs, your game INIs, `plugins.txt`, mod settings, new
   screenshots and Windows crash events, and saves if you ask for them.
@@ -11,31 +69,48 @@ gathers them into one zip with a single double-click**, so you can attach that o
 - It only reads. It never copies game files or programs (`.exe .dll .pdb .dmp .esm .esp .esl .ba2`), never
   changes the game and never connects to the network. [PRIVACY.md](PRIVACY.md) lists exactly what it reads.
 - It needs only Windows 10 or 11 and the PowerShell that ships with them.
-- It's released under the MIT license.
 
 This tool was built with [Claude Code](https://claude.com/claude-code).
 
-**For AI assistants:** [AGENTS.md](AGENTS.md) has step-by-step instructions: what the tool is for, the commands,
-the exit codes and the limits.
-
 ## Quick start
 
-1. Download `sf-log-collector-<version>.zip` from the
-   [releases page](https://github.com/taosecurity/sf-log-collector/releases) and unpack it anywhere.
+1. Download `sf-log-collector-2.0.0.zip` from the
+   [releases page](https://github.com/taosecurity/sf-log-collector/releases) and unzip it anywhere.
 2. Play until the problem happens, then **quit Starfield**.
 3. Double-click **`Collect-StarfieldTestLogs.cmd`**. Type a few words about what you were doing (or press Enter),
    and answer the question about saves (press Enter for none).
 4. The zip is in **`Documents\StarfieldLogs`**, named `StarfieldLogs-<date>-<time>-<your words>.zip`. Attach it
    to your bug report.
 
-The first run collects the last 12 hours. Windows may ask whether to run a file downloaded from the internet the
-first time: choose Run.
+The first run collects the last 12 hours. The first time, Windows may ask whether to run a file downloaded from the
+internet: choose Run.
 
-From a PowerShell window you can run the script itself with options:
+## Run it with options
+
+To use the options below, run the script from a PowerShell window:
+
+1. Open the unzipped folder in File Explorer.
+2. Click the address bar at the top, type `powershell` and press Enter. A PowerShell window opens in that folder.
+   (Or open the Start menu, type **PowerShell**, open it, and type `cd ` followed by the folder's path.)
+3. Type the command, with the options you want, and press Enter:
 
 ```
 powershell -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -Note "quest stuck at step 3"
 ```
+
+The `-ExecutionPolicy Bypass` part lets Windows run this one script without changing your settings.
+
+## Words used here
+
+- **Papyrus:** Starfield's scripting language. Mods use it for quests, menus and most other things they do. The game
+  can write what scripts do, and the errors they hit, to a text file: the Papyrus log.
+- **SFSE:** the Starfield Script Extender, which loads `.dll` plugins that add features the game lacks. SFSE and its
+  plugins write their own logs, and crash loggers for SFSE write a crash log when the game crashes.
+- **Plugin:** a mod's data file (`.esm`, `.esp` or `.esl`). It adds or changes records in the game.
+- **`plugins.txt`:** the game's list of plugins, with `*` before each active one. It is your load order.
+- **INI file:** a small text file of settings, such as `StarfieldCustom.ini`.
+- **Mod Organizer 2 (MO2) and Vortex:** the two common mod managers. MO2 keeps its own copy of `plugins.txt` and the
+  INIs for each profile.
 
 ## Turn on Papyrus logging first
 
@@ -132,9 +207,11 @@ powershell -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -Verbos
 | `Could not copy <file>` | another program holds it, or you're running as another Windows user: run it as the user who plays |
 | `Crash log found!` | nothing to fix here: the crash log is in the zip |
 
-**Exit codes:** 0 = zip made (warnings are in the manifest), 1 = the game was running and you answered "no" to
-"Collect anyway?" (with `-NoPrompt` it only warns and goes on), 2 = an error stopped it (the message names it;
-nothing was zipped).
+Exit codes:
+
+- **0:** the zip was made. Any warnings are in the manifest.
+- **1:** the game was running and you answered "no" to "Collect anyway?". With `-NoPrompt` it only warns and goes on.
+- **2:** an error stopped it. The message names it, and nothing was zipped.
 
 ## For mod authors: reading a package
 
@@ -163,6 +240,15 @@ screenshots) in a temp folder, runs the collector against it and checks the zip.
 powershell -ExecutionPolicy Bypass -File .\tests\Test-Collector.ps1
 ```
 
-## License
+## Found a mistake?
 
-MIT. See [LICENSE](LICENSE).
+Open an issue: https://github.com/taosecurity/sf-log-collector/issues. Changes are listed in
+[CHANGELOG.md](CHANGELOG.md).
+
+## Credits and license
+
+sf-log-collector was made by Richard Bejtlich. It uses only Windows PowerShell and .NET, which ship with Windows.
+For Game Pass saves, the README points to [XGP-save-extractor](https://github.com/Z1ni/XGP-save-extractor) by Z1ni,
+which isn't included. Starfield belongs to Bethesda Softworks, and the collector copies no game files.
+
+sf-log-collector is released under the MIT license (see [LICENSE](LICENSE)).
