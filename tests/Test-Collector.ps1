@@ -48,9 +48,14 @@ if ($bare -eq 'powershell' -or $bare -eq 'pwsh') {
     # .. unresolved after \\?\, and Windows PowerShell 5.1 can't start through a \\?\ path, so the
     # prefix is dropped (\\?\UNC\server\share becomes \\server\share). A PowerShell path is never
     # long enough to need it.
+    # The same goes for the \\.\ device prefix. What is left must be a full drive or UNC path:
+    # \\?\Volume{...}\ or \\?\C:pwsh.exe would otherwise resolve against the current folder.
     $p = $Shell -replace '/', '\'
-    if ($p -match '^(?i)\\\\\?\\UNC\\(.*)$') { $p = '\\' + $Matches[1] }
-    elseif ($p -match '^\\\\\?\\(.*)$') { $p = $Matches[1] }
+    if ($p -match '^(?i)\\\\[?.]\\UNC\\(.*)$') { $p = '\\' + $Matches[1] }
+    elseif ($p -match '^\\\\[?.]\\(.*)$') { $p = $Matches[1] }
+    if ($p -notmatch '^([A-Za-z]:\\|\\\\[^\\?.])') {
+        Write-Host "Shell '$given' is not a full drive or network path. $usage" -ForegroundColor Red; exit 1
+    }
     try { $Shell = [System.IO.Path]::GetFullPath($p) }
     catch { Write-Host "Shell '$given' is not a usable path. $usage" -ForegroundColor Red; exit 1 }
     if ([System.IO.Path]::GetFileName($Shell) -notmatch '^(?i)(powershell|pwsh)\.exe$') {
@@ -208,6 +213,8 @@ try {
     Assert ($log1bText -match 'Collect-StarfieldTestLogs \d+\.\d+\.\d+, PowerShell') '-Log file holds the run log'
     Assert ($r.text -match "Log     : $([regex]::Escape($log1b))") 'summary names the -Log file'
     Assert ($r.text -match 'VERBOSE: Collect-StarfieldTestLogs \d') '-Verbose shows the log on screen'
+    $verboseLines = ($r.text -split "`r?`n" | Where-Object { $_ -match '^VERBOSE:' }) -join "`n"
+    Assert (-not ($verboseLines.ToLowerInvariant().Contains($prof.ToLowerInvariant()))) '-Verbose lines hide the Windows user folder'
     $z = Open-Zip $out1b
     Assert ($z.names -contains 'collector-log.txt') 'collector-log.txt still in the zip with -Log'
 
@@ -476,6 +483,11 @@ try {
     Assert ($r.text -match ('Shell    : ' + [regex]::Escape($Shell) + ' \(')) 'the \\?\ prefix is dropped and .. resolved'
     $r = Invoke-Self @('-Shell', ('\\?\' + $exeDir + '\..\sflc-no-such-dir\' + (Split-Path $Shell -Leaf)))
     Assert ($r.code -eq 1 -and $r.text -match 'not found') "missing \\?\ path reported as not found (got $($r.code))"
+    $r = Invoke-Self @('-Shell', ('\\.\' + $exeDir + '\..\' + (Split-Path $exeDir -Leaf) + '\' + (Split-Path $Shell -Leaf)))
+    Assert ($r.code -eq 0 -and $r.text -match ('Shell    : ' + [regex]::Escape($Shell) + ' \(')) "\\.\ prefix handled like \\?\ (got $($r.code))"
+    $r = Invoke-Self @('-Shell', ('\\?\' + $exeDir.Substring(0, 2) + (Split-Path $Shell -Leaf)))
+    # PowerShell 7 already refuses it at the name check ("not accepted"); 5.1 reaches the full-path check.
+    Assert ($r.code -eq 1 -and $r.text -match 'not a full drive or network path|is not accepted') "drive-relative path after \\?\ refused (got $($r.code))"
 } finally {
     Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue
 }

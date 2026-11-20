@@ -4,7 +4,7 @@
 
 ### What's new
 
-A small release. `-Log <file>` is now a documented short form of `-LogFile <file>`, and the README and AGENTS.md say plainly where the troubleshooting log goes and how to see it as it runs. The collector itself works as it did in 2.0.0, and the test script got two fixes.
+A small release. `-Log <file>` is now a documented short form of `-LogFile <file>`, and the README and AGENTS.md say plainly where the troubleshooting log goes and how to see it as it runs. `-Verbose` no longer shows your Windows user folder on screen. Otherwise the collector works as it did in 2.0.0.
 
 ### Example
 
@@ -37,8 +37,10 @@ The same log is always inside the zip as `collector-log.txt`. Add `-Verbose` to 
 
 ### Fixes
 
+- `-Verbose` now hides your Windows user folder as `%USERPROFILE%` on screen, the same way the log does. In 2.0.0 the on-screen lines showed the real folder, so console text pasted into a public issue could name your Windows user.
+- A run that stopped very early with `-LogFile sf-logs.txt` now writes the log in the folder you ran it from. Before, a relative name could land in another folder.
 - Test script: when it picks the shell for you, the `Shell` line at the top now says so (for example "the default for this host, taken from PATH"), as its help promised.
-- Test script: `-Shell '\\?\C:\...\..\pwsh.exe'` was reported as not found, because `..` isn't resolved after a `\\?\` prefix. The prefix is now dropped before the path is resolved, which also lets Windows PowerShell 5.1 be tested through such a path (5.1 can't start when launched through a `\\?\` path).
+- Test script: `-Shell '\\?\C:\...\..\pwsh.exe'` was reported as not found, because `..` isn't resolved after a `\\?\` prefix. The prefix is now dropped before the path is resolved, which also lets Windows PowerShell 5.1 be tested through such a path (5.1 can't start when launched through a `\\?\` path). The `\\.\` prefix is handled the same way, and what's left after either prefix must be a full drive or network path.
 - Test script: new checks for `-Log`, `-Verbose` and its own `-Shell` handling (a new `-ResolveOnly` switch checks the shell and stops).
 
 ### Download

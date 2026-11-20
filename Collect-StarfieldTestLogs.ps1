@@ -139,7 +139,7 @@ function Hide-Path([string]$Text) {
 function Write-Log([string]$Text) {
     $line = '{0} {1}' -f (Get-Date).ToString('HH:mm:ss.fff'), (Hide-Path $Text)
     [void]$script:LogLines.Add($line)
-    Write-Verbose $Text
+    Write-Verbose (Hide-Path $Text)
 }
 
 function Add-Warning([string]$Text) {
@@ -967,6 +967,11 @@ try {
     if ($script:Stage -and (Test-Path -LiteralPath $script:Stage)) { Remove-Item -LiteralPath $script:Stage -Recurse -Force -ErrorAction SilentlyContinue }
     if ($LogFile) {
         try {
+            # A run that stopped before the paths were resolved still has the -LogFile as typed;
+            # .NET would resolve a relative name against its own folder, not the one the user is in.
+            if (-not [System.IO.Path]::IsPathRooted($LogFile)) {
+                $LogFile = Join-Path (Get-Location -PSProvider FileSystem).Path $LogFile
+            }
             [System.IO.File]::AppendAllLines($LogFile, [string[]]$script:LogLines)
             Write-Host "  Log     : $LogFile"
         } catch { Write-Host "  Could not write the log to ${LogFile}: $($_.Exception.Message)" -ForegroundColor Yellow }
