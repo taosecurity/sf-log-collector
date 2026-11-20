@@ -11,9 +11,13 @@
     The PowerShell to run the collector with: powershell (5.1) or pwsh (7), with or without .exe, or
     the full path of powershell.exe or pwsh.exe. Default: the PowerShell running this test; from a host
     that isn't a console PowerShell (the ISE), the console PowerShell in the same install folder, or the
-    one on PATH if that folder has none (the log says so).
+    one on PATH if that folder has none (the Shell line at the top says so). A \\?\ long-path prefix is
+    accepted and dropped, and .. in the path is resolved.
+.PARAMETER ResolveOnly
+    Only work out and check the shell, print the Shell line and stop (exit 0). The harness uses this
+    to test its own -Shell handling.
 #>
-param([string]$Shell = '')
+param([string]$Shell = '', [switch]$ResolveOnly)
 
 $ErrorActionPreference = 'Stop'
 $auto = -not $Shell
@@ -40,8 +44,14 @@ if ($bare -eq 'powershell' -or $bare -eq 'pwsh') {
     if ($found.Count -eq 0) { Write-Host "Shell '$given' not found on PATH. $usage" -ForegroundColor Red; exit 1 }
     $Shell = $found[0].Source
 } elseif ($Shell -match '^([A-Za-z]:[\\/]|\\\\|//)' -and [System.IO.Path]::GetFileName($Shell) -match '^(?i)(powershell|pwsh)\.exe$') {
-    # Slashes first: GetFullPath keeps the separators of a \\?\ long path as they are.
-    try { $Shell = [System.IO.Path]::GetFullPath(($Shell -replace '/', '\')) }
+    # Slashes first: GetFullPath keeps the separators of a \\?\ long path as they are. It also leaves
+    # .. unresolved after \\?\, and Windows PowerShell 5.1 can't start through a \\?\ path, so the
+    # prefix is dropped (\\?\UNC\server\share becomes \\server\share). A PowerShell path is never
+    # long enough to need it.
+    $p = $Shell -replace '/', '\'
+    if ($p -match '^(?i)\\\\\?\\UNC\\(.*)$') { $p = '\\' + $Matches[1] }
+    elseif ($p -match '^\\\\\?\\(.*)$') { $p = $Matches[1] }
+    try { $Shell = [System.IO.Path]::GetFullPath($p) }
     catch { Write-Host "Shell '$given' is not a usable path. $usage" -ForegroundColor Red; exit 1 }
     if ([System.IO.Path]::GetFileName($Shell) -notmatch '^(?i)(powershell|pwsh)\.exe$') {
         Write-Host "Shell '$given' is not accepted. $usage" -ForegroundColor Red; exit 1
@@ -59,6 +69,8 @@ catch { Write-Host "Shell '$given' ($Shell) failed to run: $($_.Exception.Messag
 if ($LASTEXITCODE -ne 0 -or $ShellEdition -notmatch '^(Desktop|Core) \d') {
     Write-Host "Shell '$given' ($Shell) did not answer as PowerShell (exit $LASTEXITCODE, said '$ShellEdition')." -ForegroundColor Red; exit 1
 }
+$shellLine = "Shell    : $Shell ($ShellEdition$(if ($auto) { ", $autoNote" }))"
+if ($ResolveOnly) { Write-Host $shellLine; exit 0 }
 $Collector = Join-Path (Split-Path $PSScriptRoot -Parent) 'Collect-StarfieldTestLogs.ps1'
 $Root = Join-Path ([System.IO.Path]::GetTempPath()) ('sflc-test-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $script:Failures = 0
@@ -94,7 +106,7 @@ function Open-Zip([string]$Dir) {
 
 try {
     Write-Host "Collector: $Collector"
-    Write-Host "Shell    : $Shell ($ShellEdition)"
+    Write-Host $shellLine
     Write-Host "Harness  : PowerShell $($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)"
     Write-Host "Temp     : $Root"
 
@@ -182,6 +194,22 @@ try {
     Assert (@($m.skipped | Where-Object { $_ -match 'minidump\.dmp' }).Count -eq 1) 'manifest lists the skipped .dmp'
     Assert (-not ($logText.ToLowerInvariant().Contains($prof.ToLowerInvariant()))) 'log hides the Windows user folder'
     Assert (-not (Test-Path -LiteralPath (Join-Path $out1 ('.last-run-' + $env:USERNAME)))) '-DryRun leaves no marker'
+
+    # ---------------- 1b: -Log (short form of -LogFile) and -Verbose
+    Write-Host ''
+    Write-Host 'Test 1b: -Log and -Verbose'
+    $out1b = Join-Path $Root 'out1b'
+    $log1b = Join-Path $Root 'run1b.log'
+    $r = Invoke-Collector ($common + @('-GamePath', (Join-Path $Root 'Game'), '-OutDir', $out1b, '-Log', $log1b, '-Verbose', '-DryRun'))
+    Assert ($r.code -eq 0) "exit code 0 (got $($r.code))"
+    if ($r.code -ne 0) { Write-Host $r.text }
+    Assert (Test-Path -LiteralPath $log1b) '-Log written'
+    $log1bText = $(if (Test-Path -LiteralPath $log1b) { Get-Content -LiteralPath $log1b -Raw } else { '' })
+    Assert ($log1bText -match 'Collect-StarfieldTestLogs \d+\.\d+\.\d+, PowerShell') '-Log file holds the run log'
+    Assert ($r.text -match "Log     : $([regex]::Escape($log1b))") 'summary names the -Log file'
+    Assert ($r.text -match 'VERBOSE: Collect-StarfieldTestLogs \d') '-Verbose shows the log on screen'
+    $z = Open-Zip $out1b
+    Assert ($z.names -contains 'collector-log.txt') 'collector-log.txt still in the zip with -Log'
 
     # ---------------- 2: no game folder, bad MO2 path, marker written
     Write-Host ''
@@ -431,6 +459,23 @@ try {
     Assert (@(Get-ChildItem -LiteralPath $out6 -Filter '*.zip' -ErrorAction SilentlyContinue).Count -eq 1) 'launcher made a zip'
     $null = cmd.exe /c "echo.| `"$cmd`" -NoSuchOption $fake -OutDir `"$out6`" >nul 2>&1"
     Assert ($LASTEXITCODE -ne 0) "launcher passes a failure on (got $LASTEXITCODE)"
+
+    # ---------------- 7: this harness's own -Shell handling (via -ResolveOnly)
+    Write-Host ''
+    Write-Host 'Test 7: harness -Shell'
+    function Invoke-Self([string[]]$A = @()) {
+        $o = & $Shell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath @A -ResolveOnly 2>&1 | Out-String
+        return @{ code = $LASTEXITCODE; text = $o }
+    }
+    $r = Invoke-Self
+    Assert ($r.code -eq 0 -and $r.text -match 'Shell    : .+, the default for this host') "default shell is named as the default ($($r.text.Trim()))"
+    $exeDir = Split-Path $Shell -Parent
+    $long = '\\?\' + $exeDir + '\..\' + (Split-Path $exeDir -Leaf) + '\' + (Split-Path $Shell -Leaf)
+    $r = Invoke-Self @('-Shell', $long)
+    Assert ($r.code -eq 0) "\\?\ path with .. accepted (got $($r.code): $($r.text.Trim()))"
+    Assert ($r.text -match ('Shell    : ' + [regex]::Escape($Shell) + ' \(')) 'the \\?\ prefix is dropped and .. resolved'
+    $r = Invoke-Self @('-Shell', ('\\?\' + $exeDir + '\..\sflc-no-such-dir\' + (Split-Path $Shell -Leaf)))
+    Assert ($r.code -eq 1 -and $r.text -match 'not found') "missing \\?\ path reported as not found (got $($r.code))"
 } finally {
     Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue
 }

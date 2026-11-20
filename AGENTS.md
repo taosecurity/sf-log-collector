@@ -1,7 +1,7 @@
 # AGENTS.md: sf-log-collector for AI assistants
 
 Plain steps for an AI assistant helping someone use sf-log-collector. Every command here was run once on
-sf-log-collector 2.0.0 before release. The [README](README.md) has the full description.
+sf-log-collector 2.0.1 before release. The [README](README.md) has the full description.
 
 ## 1. What it is for
 
@@ -17,19 +17,19 @@ is running.
 
 ## 2. Prerequisites
 
-- Windows 10 or 11 with Windows PowerShell 5.1 (built in) or PowerShell 7. Tested on 5.1 and 7.5.
+- Windows 10 or 11 with Windows PowerShell 5.1 (built in) or PowerShell 7. Tested on 5.1, 7.5 and 7.7.
 - No modules, no admin rights, no network.
 - Starfield from Steam or Game Pass. Vortex works as is; Mod Organizer 2 needs `-MO2Path`.
 
 ## 3. Install
 
-Download `sf-log-collector-2.0.0.zip` from https://github.com/taosecurity/sf-log-collector/releases and check it
+Download `sf-log-collector-2.0.1.zip` from https://github.com/taosecurity/sf-log-collector/releases and check it
 against the `.sha256` file:
 
-    certutil -hashfile sf-log-collector-2.0.0.zip SHA256
+    certutil -hashfile sf-log-collector-2.0.1.zip SHA256
 
-(In PowerShell, `(Get-FileHash sf-log-collector-2.0.0.zip).Hash` prints the same hash in capitals; compare without
-case.) Unpack it anywhere: everything is inside one folder, `sf-log-collector-2.0.0\`, and every command below runs
+(In PowerShell, `(Get-FileHash sf-log-collector-2.0.1.zip).Hash` prints the same hash in capitals; compare without
+case.) Unpack it anywhere: everything is inside one folder, `sf-log-collector-2.0.1\`, and every command below runs
 from there. Keep `Collect-StarfieldTestLogs.cmd` and `Collect-StarfieldTestLogs.ps1` in the same folder.
 
 ## 4. Prove the install works
@@ -38,7 +38,7 @@ The bundled test builds a fake Starfield setup in the temp folder and needs no g
 
     powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Collector.ps1
 
-It ends with `<N> passed, 0 failed` and exit code 0 (N is 141 on 2.0.0, a little lower if a test prints `skip`;
+It ends with `<N> passed, 0 failed` and exit code 0 (N is 151 on 2.0.1, a little lower if a test prints `skip`;
 what matters is `0 failed`). The test works in a new `%TEMP%\sflc-test-<random>` folder and deletes it at the end;
 it writes nothing else. On a player's PC, a dry run is the quick check (it writes a zip but doesn't move the
 "last run" marker):
@@ -77,6 +77,10 @@ All commands run from the unpacked folder in PowerShell. In `cmd.exe`, pass the 
 
       powershell -NoProfile -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -NoPrompt -Verbose -LogFile sf-logs.txt
 
+  `-Verbose` (PowerShell's common switch) prints each log line on screen as `VERBOSE: ...`. `-LogFile sf-logs.txt`
+  (short form `-Log sf-logs.txt`) also writes the log to that file, which is the only copy when a run stops with
+  exit code 2 before the zip is made.
+
 ## 6. Inputs
 
 Only files on the local PC. It reads `Documents\My Games\Starfield` (logs, INIs, saves), `%LOCALAPPDATA%\Starfield`
@@ -95,7 +99,8 @@ the options.
 - `.last-run-<Windows user>` in the same folder as the zip (`Documents\StarfieldLogs`, or the `-OutDir` folder): the
   time of the last run (not written with `-DryRun`). Each output folder has its own marker, so a different
   `-OutDir` starts again with the 12-hour window.
-- With `-LogFile <file>`: the troubleshooting log is appended to that file.
+- With `-LogFile <file>` (or its short form `-Log <file>`): the troubleshooting log is appended to that file (a
+  relative path is taken from the current folder). The summary's `Log :` line names it.
 
 ## 8. Exit codes
 
@@ -106,7 +111,8 @@ the options.
 
 ## 9. Log location
 
-`collector-log.txt` inside every zip, plus the `-LogFile` file if given; `-Verbose` shows the same lines on screen.
+`collector-log.txt` inside every zip (always on, nothing to turn on), plus the `-LogFile <file>` (or `-Log <file>`)
+file if given; `-Verbose` shows the same lines on screen. The log hides the Windows user folder as `%USERPROFILE%`.
 
 ## 10. Limits
 
@@ -119,3 +125,5 @@ the options.
   copies logs as they are: tell the player to look inside before posting a zip in public.
 - Game Pass saves are in a container it can't read: export them first and pass `-SavesDir`.
 - Windows only.
+- The test script's `-Shell` takes `powershell`, `pwsh` or the full path of `powershell.exe` or `pwsh.exe`; a
+  `\\?\` prefix is dropped first, because Windows PowerShell 5.1 can't start when launched through a `\\?\` path.

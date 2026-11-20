@@ -21,7 +21,7 @@ to the default one on your PC:
 ```
 > powershell -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -Note "quest stuck at step 3" -Hours 2 -IncludeSaves
 
-Starfield log collector 2.0.0
+Starfield log collector 2.0.1
 
 Collecting files changed last 2 hours (2026-11-20 13:36)
   ! Crash log found! (1 new log(s) in SFSE\Crashlogs)
@@ -74,7 +74,7 @@ This tool was built with [Claude Code](https://claude.com/claude-code).
 
 ## Quick start
 
-1. Download `sf-log-collector-2.0.0.zip` from the
+1. Download `sf-log-collector-2.0.1.zip` from the
    [releases page](https://github.com/taosecurity/sf-log-collector/releases) and unzip it anywhere.
 2. Play until the problem happens, then **quit Starfield**.
 3. Double-click **`Collect-StarfieldTestLogs.cmd`**. Type a few words about what you were doing (or press Enter),
@@ -181,8 +181,8 @@ save, stored as `before-...` and `after-...`. Make one hard save before you test
 | `-VortexExportDir <dir>`, `-DownloadsDir <dir>` | where Vortex exports and console transcripts are |
 | `-MyGamesDir <dir>`, `-PluginsTxtDir <dir>` | non-standard Documents or `plugins.txt` folders |
 | `-OutDir <dir>` | where the zip goes (default `Documents\StarfieldLogs`) |
-| `-LogFile <file>` | also write the troubleshooting log to this file |
-| `-Verbose` | show the troubleshooting log on screen as it runs |
+| `-LogFile <file>` (short form `-Log <file>`) | also write the troubleshooting log to this file (added to the end if it exists) |
+| `-Verbose` | show the troubleshooting log on screen as it runs (PowerShell's own switch; lines start with `VERBOSE:`) |
 | `-NoPrompt` | ask nothing (for scripts) |
 | `-DryRun` | build the zip but don't move the "last run" marker, so the next run covers the same window |
 
@@ -197,6 +197,12 @@ warning. To see it as it runs, or to keep it when something fails before the zip
 ```
 powershell -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -Verbose -LogFile sf-logs.txt
 ```
+
+Where the log goes: it is always inside the zip as `collector-log.txt`, so there is nothing to turn on. `-LogFile`
+(or its short form `-Log`) also writes it to the file you name, in the folder you run the command from unless you
+give a full path, and the summary's `Log :` line shows where. That file is the only copy when a run stops with an
+error before the zip is made. `-Verbose` shows the same lines on screen. The log shows `%USERPROFILE%` in place of
+your Windows user folder.
 
 | Message | What to do |
 |---|---|
@@ -239,6 +245,11 @@ screenshots) in a temp folder, runs the collector against it and checks the zip.
 ```
 powershell -ExecutionPolicy Bypass -File .\tests\Test-Collector.ps1
 ```
+
+It runs the collector with the PowerShell that started it. `-Shell powershell` or `-Shell pwsh` (or the full path
+of `powershell.exe` or `pwsh.exe`) picks another one, and the `Shell` line at the top says which one ran. A `\\?\`
+prefix on that path is dropped first, because Windows PowerShell 5.1 can't start when launched through a `\\?\`
+path.
 
 ## Found a mistake?
 

@@ -1,5 +1,50 @@
 # Changelog
 
+## 2.0.1 (2026-11-20)
+
+### What's new
+
+A small release. `-Log <file>` is now a documented short form of `-LogFile <file>`, and the README and AGENTS.md say plainly where the troubleshooting log goes and how to see it as it runs. The collector itself works as it did in 2.0.0, and the test script got two fixes.
+
+### Example
+
+A real run on a made-up test setup (the options that point at the test setup's folders are left out, and the paths are shortened):
+
+    > powershell -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -Note "menu test" -NoPrompt -Log sf-logs.txt
+
+    Starfield log collector 2.0.1
+
+    Collecting files changed last 12 hours (first run) (2026-11-20 05:32)
+
+    Done.
+      Package : C:\Users\<you>\Documents\StarfieldLogs\StarfieldLogs-20261120-173252-menu-test.zip
+      Size    : 0.0 MB, 4 files
+      Contents: papyrus 1, gameIni 2, pluginsTxt 1
+
+    Send this zip to whoever asked for your logs. Look inside first if you share it in public.
+      Log     : C:\Users\<you>\sf-logs.txt
+
+    > Get-Content sf-logs.txt -TotalCount 2
+    17:32:52.711 Collect-StarfieldTestLogs 2.0.1, PowerShell 5.1.26100.9818
+    17:32:52.747 note: menu test; saves: newest=False pair=False
+
+The same log is always inside the zip as `collector-log.txt`. Add `-Verbose` to see it on screen as it runs.
+
+### Changes
+
+- `-Log <file>` is a short form of `-LogFile <file>`.
+- The README's Options and Troubleshooting sections and AGENTS.md describe the log: where it goes, that `-Log` adds to the end of an existing file, and that `-Verbose` shows it on screen.
+
+### Fixes
+
+- Test script: when it picks the shell for you, the `Shell` line at the top now says so (for example "the default for this host, taken from PATH"), as its help promised.
+- Test script: `-Shell '\\?\C:\...\..\pwsh.exe'` was reported as not found, because `..` isn't resolved after a `\\?\` prefix. The prefix is now dropped before the path is resolved, which also lets Windows PowerShell 5.1 be tested through such a path (5.1 can't start when launched through a `\\?\` path).
+- Test script: new checks for `-Log`, `-Verbose` and its own `-Shell` handling (a new `-ResolveOnly` switch checks the shell and stops).
+
+### Download
+
+Download `sf-log-collector-2.0.1.zip` and its `.sha256` file below, unzip it anywhere and follow the Quick start in the README. If you already have 2.0.0, nothing changes in how the collector runs.
+
 ## 2.0.0 (2026-11-19)
 
 ### What's new

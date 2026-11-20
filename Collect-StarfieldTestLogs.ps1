@@ -56,7 +56,9 @@
 .PARAMETER OutDir
     Where the zip goes (default Documents\StarfieldLogs).
 .PARAMETER LogFile
-    Also write the troubleshooting log to this file (it is always inside the zip).
+    Also write the troubleshooting log to this file (it is always inside the zip as
+    collector-log.txt). The log is added to the end of the file if it exists. -Log is
+    the short form. Add -Verbose to see the same lines on screen as it runs.
 .PARAMETER NoPrompt
     Ask no questions; use the defaults.
 .PARAMETER DryRun
@@ -80,13 +82,14 @@ param(
     [string]$MyGamesDir = '',
     [string]$PluginsTxtDir = '',
     [string]$OutDir = '',
+    [Alias('Log')]
     [string]$LogFile = '',
     [switch]$NoPrompt,
     [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = '2.0.0'
+$ScriptVersion = '2.0.1'
 $LargeLimit = 50MB
 $MaxScreenshots = 40
 $BlockedExt = @('.exe', '.dll', '.pdb', '.dmp', '.esm', '.esp', '.esl', '.ba2')
