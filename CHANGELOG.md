@@ -4,11 +4,11 @@
 
 ### What's new
 
-A small release. `-Log <file>` is now a documented short form of `-LogFile <file>`, and the README and AGENTS.md say plainly where the troubleshooting log goes and how to see it as it runs. `-Verbose` no longer shows your Windows user folder on screen. Otherwise the collector works as it did in 2.0.0.
+This is a small release. `-Log <file>` is now a documented short form of `-LogFile <file>`, and the README and AGENTS.md say plainly where the troubleshooting log goes and how to see it as it runs. `-Verbose` no longer shows your Windows user folder on screen. Otherwise the collector works as it did in 2.0.0.
 
 ### Example
 
-A real run on a made-up test setup (the options that point at the test setup's folders are left out, and the paths are shortened):
+This is a real run on a made-up test setup (the options that point at the test setup's folders are left out, and the paths are shortened):
 
     > powershell -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -Note "menu test" -NoPrompt -Log sf-logs.txt
 
@@ -41,7 +41,7 @@ The same log is always inside the zip as `collector-log.txt`. Add `-Verbose` to 
 - A run that stopped very early with `-LogFile sf-logs.txt` now writes the log in the folder you ran it from. Before, a relative name could land in another folder.
 - Test script: when it picks the shell for you, the `Shell` line at the top now says so (for example "the default for this host, taken from PATH"), as its help promised.
 - Test script: `-Shell '\\?\C:\...\..\pwsh.exe'` was reported as not found, because `..` isn't resolved after a `\\?\` prefix. The prefix is now dropped before the path is resolved, which also lets Windows PowerShell 5.1 be tested through such a path (5.1 can't start when launched through a `\\?\` path). The `\\.\` prefix is handled the same way, and what's left after either prefix must be a full drive or network path.
-- Test script: new checks for `-Log`, `-Verbose` and its own `-Shell` handling (a new `-ResolveOnly` switch checks the shell and stops).
+- Test script: it has new checks for `-Log`, `-Verbose` and its own `-Shell` handling (a new `-ResolveOnly` switch checks the shell and stops).
 
 ### Download
 
@@ -55,7 +55,7 @@ This is the first public release; versions 1.0.0 to 1.1.1 were private builds. s
 
 ### Example
 
-A real run on a made-up test setup (only the zip's folder is changed, to the default one):
+This is a real run on a made-up test setup (only the zip's folder is changed, to the default one):
 
     > powershell -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -Note "quest stuck at step 3" -Hours 2 -IncludeSaves
 
@@ -83,7 +83,7 @@ Most players never type this: double-clicking `Collect-StarfieldTestLogs.cmd` as
 - Mod Organizer 2: `-MO2Path` and `-MO2Profile` add the profile's `plugins.txt`, `loadorder.txt`, `modlist.txt` and INIs, MO2's `overwrite\SFSE` reports and settings, and MO2's logs.
 - Screenshots default to Steam's Starfield screenshots and photo mode's folder, and `-ScreenshotDir` takes several folders (`"dir1;dir2"`).
 - New `-DownloadsDir`, `-MyGamesDir` and `-PluginsTxtDir` options cover non-standard folders.
-- A troubleshooting log: `collector-log.txt` in every zip, `-LogFile <file>`, and `-Verbose`.
+- A troubleshooting log is added: `collector-log.txt` in every zip, `-LogFile <file>`, and `-Verbose`.
 - The manifest, the log and `events.txt` show `%USERPROFILE%` in place of the Windows user folder, and they no longer record the computer or user name.
 - Errors stop with exit code 2 and a message naming the problem, and the launcher passes the exit code on.
 - A Game Pass save container (not `.sfs` files) gets a warning saying how to export the saves.
@@ -95,16 +95,16 @@ Download `sf-log-collector-2.0.0.zip` and its `.sha256` file below, unzip it any
 
 ## 1.1.1 (private)
 
-- Don't stop when another Windows user can't read the default game folder.
+- The collector no longer stops when another Windows user can't read the default game folder.
 
 ## 1.1.0 (private)
 
-- Before/after save pair (`-SavePair`).
+- A before/after save pair (`-SavePair`) is added.
 
 ## 1.0.1 (private)
 
-- Always include `Papyrus.1.log`.
+- The collector always includes `Papyrus.1.log`.
 
 ## 1.0.0 (private)
 
-- First version.
+- This is the first version.
