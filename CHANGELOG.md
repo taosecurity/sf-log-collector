@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.1.0 (not released yet)
+## 2.1.0 (2026-11-24)
 
 ### What's new
 
