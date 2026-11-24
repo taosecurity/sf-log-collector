@@ -193,7 +193,8 @@ transcripts) and in its own `manifest.json`, `collector-log.txt` and `events.txt
 | your Steam account number in `userdata\<number>` | `userdata\<steam-id>` |
 
 Only the copies in the zip change; your own files are never touched. Plugin names, form IDs, mod, quest and script
-names stay as they are, because they are what a mod author needs. The summary's `Redacted:` line says how many files
+names stay as they are, because they are what a mod author needs, unless one of them is your user name or computer
+name as a whole word (a plugin named after you becomes `<user>.esm`). The summary's `Redacted:` line says how many files
 were changed, and `collector-log.txt` lists each one with the number of replacements (never the values).
 
 What `-Redact` does not hide:

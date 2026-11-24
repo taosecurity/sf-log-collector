@@ -627,6 +627,26 @@ try {
     Assert ($p8c -eq "UI zq button`r`nfile D:\Users\<user>\x.txt`r`n") "two-letter name replaced only in the path ($($p8c.Trim() -replace "`r`n", ' | '))"
     Assert ($l8c -match 'under 3 characters') 'collector log says the short name is hidden only in paths'
 
+    # 8e: a user name with a letter outside English, in a UTF-8 log with one invalid byte (read as Latin-1)
+    $nUser = 'Zqx' + [char]0xE9 + 'ra'
+    $nProf = Join-Path $Root "N\Users\$nUser"
+    [void](New-Item -ItemType Directory -Path $nProf -Force)
+    New-File 'N\MyGames\StarfieldCustom.ini' "[Papyrus]`r`nbEnableLogging=1`r`n" | Out-Null
+    $nTail = [byte[]](@(0xFF) + [System.Text.Encoding]::ASCII.GetBytes("`r`n"))
+    New-Bytes 'N\MyGames\Logs\Script\Papyrus.0.log' ([byte[]]($utf8.GetBytes("file $nProf\x.txt by $nUser`r`n") + $nTail)) | Out-Null
+    $out8e = Join-Path $Root 'out8e'
+    $r = Invoke-WithEnv @{ USERPROFILE = $nProf; USERNAME = $nUser; COMPUTERNAME = $fPc } {
+        Invoke-Collector @('-NoPrompt', '-Hours', '2', '-MyGamesDir', (Join-Path $Root 'N\MyGames'), '-PluginsTxtDir', (Join-Path $Root 'N\none'),
+            '-DownloadsDir', (Join-Path $Root 'N\none'), '-ScreenshotDir', (Join-Path $Root 'N\none'), '-GamePath', (Join-Path $Root 'Game'),
+            '-Redact', '-DryRun', '-OutDir', $out8e) }
+    Assert ($r.code -eq 0) "non-English name run exit code 0 (got $($r.code))"
+    $p8e = $null
+    if (@(Get-ChildItem -LiteralPath $out8e -Filter '*.zip' -ErrorAction SilentlyContinue).Count -gt 0) {
+        $p8e = [System.IO.File]::ReadAllBytes((Join-Path (Open-Zip $out8e).dir 'docs\Logs\Script\Papyrus.0.log'))
+    }
+    $want8e = [byte[]]([System.Text.Encoding]::ASCII.GetBytes("file %USERPROFILE%\x.txt by <user>`r`n") + $nTail)
+    Assert ($p8e -and [System.BitConverter]::ToString($p8e) -eq [System.BitConverter]::ToString($want8e)) 'a UTF-8 name with a letter outside English is hidden in a file that is not valid UTF-8, and the bad byte is kept'
+
     # 8d: double-click: the new question turns -Redact on with y and stays off with Enter
     $out8d = Join-Path $Root 'out8d'
     $ask = @('-Hours', '2', '-MyGamesDir', (Join-Path $Root 'S\MyGames'), '-PluginsTxtDir', (Join-Path $Root 'S\none'),

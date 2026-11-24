@@ -32,7 +32,7 @@ In the zip, the SFSE log's `config path = C:\Users\<you>\Documents\My Games\Star
 
 ### Changes
 
-- New `-Redact` switch. In every copied text file (logs, `plugins.txt`, INIs, crash logs, SFSE reports, Vortex exports, console transcripts) and in the collector's own files, it replaces your user folder with `%USERPROFILE%` (in the `\`, `/`, JSON `\\` and short 8.3 forms), your Windows user name with `<user>`, your computer name with `<computer>`, and `userdata\<number>` with `userdata\<steam-id>`. Plugin names, form IDs and mod names are not touched.
+- New `-Redact` switch. In every copied text file (logs, `plugins.txt`, INIs, crash logs, SFSE reports, Vortex exports, console transcripts) and in the collector's own files, it replaces your user folder with `%USERPROFILE%` (in the `\`, `/`, JSON `\\` and short 8.3 forms), your Windows user name with `<user>`, your computer name with `<computer>`, and `userdata\<number>` with `userdata\<steam-id>`. Plugin names, form IDs and mod names are not touched, unless one of them is your user name or computer name as a whole word.
 - Saves, screenshots, files that don't look like text, and file names are left as they are, and the README, PRIVACY.md and the help text say so. A user name under 3 letters is hidden only in `\Users\<name>` paths.
 - A text file that can't be redacted is left out of the zip with a warning, so it is never sent unredacted.
 - Files named `.log`, `.txt`, `.ini`, `.json` or `.toml` are always redacted as text, so a log that a crash cut off with zero bytes at its end, or a UTF-16 file without a byte-order mark, is not passed over as binary.

@@ -66,7 +66,8 @@
     Vortex exports) and in its own manifest and log. They become %USERPROFILE%,
     <user>, <computer> and userdata\<steam-id>. Saves, screenshots and files that
     don't look like text are copied as they are, and zip entry names are not changed.
-    Plugin names and form IDs are never touched. Asked for if not given (Enter = no).
+    Plugin names and form IDs are kept, unless one is your user or computer name as a
+    whole word. Asked for if not given (Enter = no).
 .PARAMETER NoPrompt
     Ask no questions; use the defaults (no saves, no -Redact).
 .PARAMETER DryRun
@@ -144,41 +145,53 @@ if ($env:USERNAME) { $script:MarkerRx = '(?i)\.last-run-' + [regex]::Escape($env
 # and JSON write it: \, / and \\), so a whole path becomes %USERPROFILE% rather than C:\Users\<user>.
 # Names are whole words (no letter, digit or _ either side), any case. A name under 3 characters is
 # hidden only after \Users\, so a user called "ui" doesn't turn every "UI" in a log into <user>.
+# A file that is not valid UTF-8 is read as Latin-1, where a UTF-8 letter outside English reads as two
+# other letters: that pass also gets the rules built from each value's UTF-8 bytes read as Latin-1.
 $script:RedactRules = New-Object System.Collections.ArrayList
+$script:RedactRulesLatin1 = New-Object System.Collections.ArrayList
 $script:RedactNotes = New-Object System.Collections.ArrayList
 function Add-RedactRule([string]$Pattern, [string]$With) {
     $rx = New-Object System.Text.RegularExpressions.Regex($Pattern, [System.Text.RegularExpressions.RegexOptions]'IgnoreCase, CultureInvariant')
-    [void]$script:RedactRules.Add(@{ rx = $rx; with = $With })
+    [void]$script:RedactInto.Add(@{ rx = $rx; with = $With })
 }
-if ($profForms.Count -gt 0) {
-    $redForms = foreach ($f in $profForms) { $f; ($f -replace '\\', '/'); ($f -replace '\\', '\\') }
-    $redForms = @($redForms | Select-Object -Unique | Sort-Object Length -Descending | ForEach-Object { [regex]::Escape($_) })
-    Add-RedactRule ('(?:' + ($redForms -join '|') + ')(?!\.?[\w~-])') '%USERPROFILE%'
-}
-if ($script:MarkerRx) { Add-RedactRule $script:MarkerRx.Substring(4) '.last-run-%USERNAME%' }
-$userNames = @()
-if ($env:USERNAME) { $userNames += $env:USERNAME }
-if ($env:USERPROFILE) {
-    $leaf = Split-Path $env:USERPROFILE.TrimEnd('\') -Leaf
-    if ($leaf -and -not ($userNames -contains $leaf)) { $userNames += $leaf }
-}
-# Longest first: a profile folder named <user>-something is replaced whole, not as <user>-something.
-foreach ($u in @($userNames | Sort-Object Length -Descending)) {
-    if ($u.Length -ge 3) { Add-RedactRule ('(?<!\w)' + [regex]::Escape($u) + '(?!\w)') '<user>' }
-    else {
-        Add-RedactRule ('(?<=[\\/]{1,2}Users[\\/]{1,2})' + [regex]::Escape($u) + '(?!\.?[\w~-])') '<user>'
-        [void]$script:RedactNotes.Add('redact: the user name is under 3 characters, so it is hidden only in \Users\<name> paths')
+function Add-RedactRuleSet([System.Collections.ArrayList]$Into, [scriptblock]$Form, [bool]$Notes) {
+    $script:RedactInto = $Into
+    if ($profForms.Count -gt 0) {
+        $redForms = foreach ($f in $profForms) { $f; ($f -replace '\\', '/'); ($f -replace '\\', '\\') }
+        $redForms = @($redForms | Select-Object -Unique | Sort-Object Length -Descending | ForEach-Object { [regex]::Escape((& $Form $_)) })
+        Add-RedactRule ('(?:' + ($redForms -join '|') + ')(?!\.?[\w~-])') '%USERPROFILE%'
     }
+    if ($env:USERNAME) { Add-RedactRule ('\.last-run-' + [regex]::Escape((& $Form $env:USERNAME)) + '(?![\w~-])') '.last-run-%USERNAME%' }
+    $userNames = @()
+    if ($env:USERNAME) { $userNames += $env:USERNAME }
+    if ($env:USERPROFILE) {
+        $leaf = Split-Path $env:USERPROFILE.TrimEnd('\') -Leaf
+        if ($leaf -and -not ($userNames -contains $leaf)) { $userNames += $leaf }
+    }
+    # Longest first: a profile folder named <user>-something is replaced whole, not as <user>-something.
+    foreach ($u in @($userNames | Sort-Object Length -Descending)) {
+        if ($u.Length -ge 3) { Add-RedactRule ('(?<!\w)' + [regex]::Escape((& $Form $u)) + '(?!\w)') '<user>' }
+        else {
+            Add-RedactRule ('(?<=[\\/]{1,2}Users[\\/]{1,2})' + [regex]::Escape((& $Form $u)) + '(?!\.?[\w~-])') '<user>'
+            if ($Notes) { [void]$script:RedactNotes.Add('redact: the user name is under 3 characters, so it is hidden only in \Users\<name> paths') }
+        }
+    }
+    if ($env:COMPUTERNAME) {
+        if ($env:COMPUTERNAME.Length -ge 3) { Add-RedactRule ('(?<!\w)' + [regex]::Escape((& $Form $env:COMPUTERNAME)) + '(?!\w)') '<computer>' }
+        elseif ($Notes) { [void]$script:RedactNotes.Add('redact: the computer name is under 3 characters, so it is not replaced') }
+    }
+    Add-RedactRule '(?<=(?<!\w)userdata[\\/]{1,2})\d+(?!\w)' '<steam-id>'
 }
-if ($env:COMPUTERNAME) {
-    if ($env:COMPUTERNAME.Length -ge 3) { Add-RedactRule ('(?<!\w)' + [regex]::Escape($env:COMPUTERNAME) + '(?!\w)') '<computer>' }
-    else { [void]$script:RedactNotes.Add('redact: the computer name is under 3 characters, so it is not replaced') }
+Add-RedactRuleSet $script:RedactRules { param($s) $s } $true
+Add-RedactRuleSet $script:RedactRulesLatin1 { param($s) $s } $false
+if ((@($profForms) + @($env:USERNAME, $env:COMPUTERNAME) -join '') -match '[^\x00-\x7F]') {
+    $script:Latin1Enc = [System.Text.Encoding]::GetEncoding(28591)
+    Add-RedactRuleSet $script:RedactRulesLatin1 { param($s) $script:Latin1Enc.GetString([System.Text.Encoding]::UTF8.GetBytes($s)) } $false
 }
-Add-RedactRule '(?<=(?<!\w)userdata[\\/]{1,2})\d+(?!\w)' '<steam-id>'
 
-# Applies every -Redact rule; adds the number of replacements to $Hits. Never logs the values.
-function ConvertTo-RedactedText([string]$Text, [ref]$Hits) {
-    foreach ($r in $script:RedactRules) {
+# Applies every -Redact rule (or the Latin-1 set); adds the number of replacements to $Hits. Never logs the values.
+function ConvertTo-RedactedText([string]$Text, [ref]$Hits, [switch]$Latin1) {
+    foreach ($r in $(if ($Latin1) { $script:RedactRulesLatin1 } else { $script:RedactRules })) {
         $c = $r.rx.Matches($Text).Count
         if ($c -gt 0) { $Text = $r.rx.Replace($Text, $r.with); $Hits.Value += $c }
     }
@@ -219,7 +232,7 @@ function Find-LineEnd([byte[]]$Data, [int]$Unit, [bool]$BigEndian) {
 
 # Reads $Path in pieces that end at a line break (no rule crosses one), writes the redacted text to
 # $Tmp with the same byte-order mark and encoding, and returns the number of replacements.
-function Invoke-RedactStream([string]$Path, [string]$Tmp, [int]$Bom, [System.Text.Encoding]$Enc, [int]$Unit, [bool]$BigEndian) {
+function Invoke-RedactStream([string]$Path, [string]$Tmp, [int]$Bom, [System.Text.Encoding]$Enc, [int]$Unit, [bool]$BigEndian, [bool]$Latin1 = $false) {
     $hits = 0
     $in = [System.IO.File]::OpenRead($Path)
     try {
@@ -242,7 +255,7 @@ function Invoke-RedactStream([string]$Path, [string]$Tmp, [int]$Bom, [System.Tex
                 $cut = $(if ($eof) { $data.Length } else { Find-LineEnd $data $Unit $BigEndian })
                 if ($cut -gt 0) {
                     $n = 0
-                    $new = ConvertTo-RedactedText ($Enc.GetString($data, 0, $cut)) ([ref]$n)
+                    $new = ConvertTo-RedactedText ($Enc.GetString($data, 0, $cut)) ([ref]$n) -Latin1:$Latin1
                     $hits += $n
                     $bytes = $Enc.GetBytes($new)
                     $out.Write($bytes, 0, $bytes.Length)
@@ -284,13 +297,14 @@ function Invoke-RedactFile([string]$Path) {
             $be = ($kind -eq 'utf16be')
             $hits = Invoke-RedactStream $Path $tmp $bom (New-Object System.Text.UnicodeEncoding($be, $false, $true)) 2 $be
         } else {
-            # UTF-8 when every byte is valid UTF-8, otherwise Latin-1, where every byte round-trips.
+            # UTF-8 when every byte is valid UTF-8, otherwise Latin-1, where every byte round-trips (with the
+            # Latin-1 rule set, so a UTF-8 name with letters outside English is still found).
             try { $hits = Invoke-RedactStream $Path $tmp $bom (New-Object System.Text.UTF8Encoding($false, $true)) 1 $false }
             catch {
                 $e = $_.Exception
                 while ($e -and -not ($e -is [System.Text.DecoderFallbackException])) { $e = $e.InnerException }
                 if (-not $e) { throw }
-                $hits = Invoke-RedactStream $Path $tmp $bom ([System.Text.Encoding]::GetEncoding(28591)) 1 $false
+                $hits = Invoke-RedactStream $Path $tmp $bom ([System.Text.Encoding]::GetEncoding(28591)) 1 $false $true
             }
         }
         if ($hits -gt 0) { [System.IO.File]::Copy($tmp, $Path, $true) }
@@ -331,6 +345,7 @@ function Copy-ToPackage {
         return $false
     }
     $target = Join-Path $script:Stage $Dest
+    $redactStop = $false
     $targetDir = Split-Path $target -Parent
     if (-not (Test-Path -LiteralPath $targetDir)) { [void](New-Item -ItemType Directory -Path $targetDir -Force) }
     try {
@@ -348,7 +363,12 @@ function Copy-ToPackage {
             try { $hits = Invoke-RedactFile $target }
             catch {
                 $why = $_.Exception.Message
-                Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+                # If the unredacted copy can't be removed either, stop: it must never reach the zip.
+                try { Remove-Item -LiteralPath $target -Force -ErrorAction Stop } catch { }
+                if (Test-Path -LiteralPath $target) {
+                    $redactStop = $true
+                    throw "Stopped: $($File.FullName) could not be redacted, and its unredacted copy in the staging folder could not be removed ($why). Close the program holding it (often antivirus) and run the collector again."
+                }
                 Add-Warning "Left out $($File.FullName) because it could not be redacted: $why"
                 return $false
             }
@@ -381,6 +401,7 @@ function Copy-ToPackage {
         Write-Log "copy: $($File.FullName) -> $Dest ($($File.Length) bytes)"
         return $true
     } catch {
+        if ($redactStop) { throw }
         Add-Warning "Could not copy $($File.FullName): $($_.Exception.Message) (close the program that has it open, or run as the Windows user who plays)"
         return $false
     }

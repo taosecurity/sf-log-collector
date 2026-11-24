@@ -51,7 +51,8 @@ With `-Redact` (or `y` at the double-click question), the collector also changes
 puts in the zip (logs, `plugins.txt`, INIs, crash logs, Vortex exports) and its own files: your Windows user folder
 becomes `%USERPROFILE%`, your Windows user name `<user>`, your computer name `<computer>`, and your Steam account
 number in `userdata\<number>` becomes `userdata\<steam-id>`. Your original files are never changed. Plugin names,
-form IDs, mod names and script names stay as they are, because a mod author needs them. These are not changed even
+form IDs, mod names and script names stay as they are, because a mod author needs them, unless one of them is your
+user name or computer name as a whole word. These are not changed even
 with `-Redact`:
 
 - saves (they contain your character's name, which is also in the save's file name in hex);
