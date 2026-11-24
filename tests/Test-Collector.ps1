@@ -510,6 +510,10 @@ try {
     [System.IO.File]::WriteAllText($bom8, "bom $fProf\d`r`n", (New-Object System.Text.UTF8Encoding($true)))
     $ansiBytes = [byte[]](@([byte][char]'c', [byte][char]'a', [byte][char]'f', 0xE9, 32) + [System.Text.Encoding]::ASCII.GetBytes("$fProf\e`r`n"))
     $ansi8 = New-Bytes "$docsRel\SFSE\Logs\ansi.txt" $ansiBytes
+    # A crash-cut log ending in zero padding, and a UTF-16 LE text file without a byte-order mark.
+    $nulBytes = [byte[]]([System.Text.Encoding]::ASCII.GetBytes("[11/24/2026 - 10:00:00PM] error: File `"$fProf\Documents\My Games\Starfield\Data\Scripts\x.pex`" not found`r`n") + (New-Object byte[] 4096))
+    New-Bytes "$docsRel\SFSE\Logs\cut.log" $nulBytes | Out-Null
+    New-Bytes "$docsRel\SFSE\Logs\nobom.txt" ([System.Text.Encoding]::Unicode.GetBytes("nobom $fProf\f on $fPc`r`n")) | Out-Null
     $blob8 = New-Bytes "$docsRel\SFSE\Logs\blob.bin" ([byte[]](@(0, 1, 2) + [System.Text.Encoding]::ASCII.GetBytes($fProf)))
     $save8 = New-File "$fLeafRel\Saves\Save1_ABCD1234_000102_20261119100000_1_2.sfs" "save at $fProf by $fUser"
     $shot8 = New-File "$fLeafRel\Shots\s.png" "png at $fProf"
@@ -564,6 +568,11 @@ try {
         Assert ([System.BitConverter]::ToString($ab) -eq [System.BitConverter]::ToString($want)) 'a non-UTF-8 byte (Latin-1) is kept as it was'
         Assert ((Get-Sha (Join-Path $z8.dir 'docs\SFSE\Logs\plain.txt')) -eq (Get-Sha $plain8)) 'a file with nothing to hide stays byte-identical'
         Assert ((Get-Sha (Join-Path $z8.dir 'docs\SFSE\Logs\blob.bin')) -eq (Get-Sha $blob8)) 'a binary-looking file is left as it is'
+        $cb = [System.IO.File]::ReadAllBytes((Join-Path $z8.dir 'docs\SFSE\Logs\cut.log'))
+        $ct = [System.Text.Encoding]::GetEncoding(28591).GetString($cb)
+        Assert ($ct.StartsWith("[11/24/2026 - 10:00:00PM] error: File `"%USERPROFILE%\Documents\My Games\Starfield\Data\Scripts\x.pex`" not found`r`n") -and $ct.EndsWith([string][char]0 * 4096)) 'a .log ending in zero padding (Papyrus-style line) is redacted and keeps its padding'
+        $nb = [System.IO.File]::ReadAllBytes((Join-Path $z8.dir 'docs\SFSE\Logs\nobom.txt'))
+        Assert ([System.Text.Encoding]::Unicode.GetString($nb) -eq "nobom %USERPROFILE%\f on <computer>`r`n") 'a UTF-16 .txt without a byte-order mark is redacted'
         Assert ((Get-Sha (Join-Path $z8.dir 'saves\Save1_ABCD1234_000102_20261119100000_1_2.sfs')) -eq (Get-Sha $save8)) 'the save is left as it is'
         Assert ((Get-Sha (Join-Path $z8.dir 'screenshots\s.png')) -eq (Get-Sha $shot8)) 'the screenshot is left as it is'
         $m8 = $z8.manifest

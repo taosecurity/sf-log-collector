@@ -35,6 +35,7 @@ In the zip, the SFSE log's `config path = C:\Users\<you>\Documents\My Games\Star
 - New `-Redact` switch. In every copied text file (logs, `plugins.txt`, INIs, crash logs, SFSE reports, Vortex exports, console transcripts) and in the collector's own files, it replaces your user folder with `%USERPROFILE%` (in the `\`, `/`, JSON `\\` and short 8.3 forms), your Windows user name with `<user>`, your computer name with `<computer>`, and `userdata\<number>` with `userdata\<steam-id>`. Plugin names, form IDs and mod names are not touched.
 - Saves, screenshots, files that don't look like text, and file names are left as they are, and the README, PRIVACY.md and the help text say so. A user name under 3 letters is hidden only in `\Users\<name>` paths.
 - A text file that can't be redacted is left out of the zip with a warning, so it is never sent unredacted.
+- Files named `.log`, `.txt`, `.ini`, `.json` or `.toml` are always redacted as text, so a log that a crash cut off with zero bytes at its end, or a UTF-16 file without a byte-order mark, is not passed over as binary.
 - The double-click run asks `Hide your Windows user name, computer name and user folder in the copied files? [y/N]`. With `-NoPrompt` and no `-Redact`, nothing is redacted.
 - `manifest.json` has a new top-level `redact` field. A file that redaction changed has `"redacted": true`, `size` and `sha256` for the copy in the zip, and `sourceSize` for the original.
 - The test script has new checks for `-Redact` and now reports a collector that fails to start as a failed check instead of stopping.
@@ -42,6 +43,7 @@ In the zip, the SFSE log's `config path = C:\Users\<you>\Documents\My Games\Star
 ### Fixes
 
 - `Get-Help .\Collect-StarfieldTestLogs.ps1 -Detailed` shows the help text and every option again. In 2.0.0 and 2.0.1 the license lines directly above the help text kept PowerShell from finding it, so `Get-Help` showed only the list of option names.
+- Answers piped into the questions from Windows PowerShell 5.1 now count. 5.1 puts an invisible byte-order mark before the first answer, so a piped `y` was read as no; the collector now strips it and any spaces around an answer.
 
 ## 2.0.1 (2026-11-20)
 

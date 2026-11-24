@@ -194,8 +194,10 @@ function Hide-Path([string]$Text) {
 }
 
 # -Redact on a staged copy. Saves and screenshots never reach this; a file is text when it starts with
-# a UTF-16 byte-order mark or has no zero byte in its first 64 KB.
+# a UTF-16 byte-order mark, has no zero byte in its first 64 KB, or has a text extension ($RedactTextExt).
 $RedactSkipExt = @('.sfs', '.png', '.jpg', '.jpeg', '.bmp')
+# These are always read as text, even with a zero byte in them.
+$RedactTextExt = @('.log', '.txt', '.ini', '.json', '.toml', '.xml', '.csv', '.cfg', '.yaml', '.yml')
 $script:RedactFiles = 0
 $script:RedactTotal = 0
 $script:RedactLeft = 0
@@ -267,7 +269,15 @@ function Invoke-RedactFile([string]$Path) {
     if ($got -ge 3 -and $head[0] -eq 0xEF -and $head[1] -eq 0xBB -and $head[2] -eq 0xBF) { $bom = 3; $kind = 'utf8' }
     elseif ($got -ge 2 -and $head[0] -eq 0xFF -and $head[1] -eq 0xFE) { $bom = 2; $kind = 'utf16le' }
     elseif ($got -ge 2 -and $head[0] -eq 0xFE -and $head[1] -eq 0xFF) { $bom = 2; $kind = 'utf16be' }
-    if ($kind -notlike 'utf16*' -and $got -gt 0 -and [Array]::IndexOf($head, [byte]0, 0, $got) -ge 0) { return -1 }
+    if ($kind -eq 'plain' -and $got -gt 0 -and [Array]::IndexOf($head, [byte]0, 0, $got) -ge 0) {
+        # A zero byte means binary, except in a file with a text extension: a log cut off by a crash can
+        # end in zero padding, and UTF-16 can come without a byte-order mark (zeros at every odd or even byte).
+        if ($RedactTextExt -notcontains [System.IO.Path]::GetExtension($Path).ToLowerInvariant()) { return -1 }
+        $odd = 0; $even = 0
+        for ($j = 0; $j -lt $got; $j++) { if ($head[$j] -eq 0) { if ($j % 2) { $odd++ } else { $even++ } } }
+        if ($got -ge 2 -and $odd -ge [int]($got / 2 * 0.9) -and $even -lt [int]($got / 20) + 1) { $kind = 'utf16le' }
+        elseif ($got -ge 2 -and $even -ge [int]($got / 2 * 0.9) -and $odd -lt [int]($got / 20) + 1) { $kind = 'utf16be' }
+    }
     $tmp = $Path + '.redact-tmp'
     try {
         if ($kind -like 'utf16*') {
@@ -288,6 +298,12 @@ function Invoke-RedactFile([string]$Path) {
         if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force }
     }
     return $hits
+}
+
+# Read-Host without a byte-order mark or spaces around the answer: Windows PowerShell 5.1 piping
+# answers into pwsh puts U+FEFF before the first one, so "y" would not count as yes.
+function Read-Answer([string]$Prompt) {
+    return ([string](Read-Host $Prompt)).Trim([char[]]@([char]0xFEFF, ' ', "`t"))
 }
 
 function Write-Log([string]$Text) {
@@ -779,20 +795,20 @@ try {
     if (Get-Process -Name 'Starfield' -ErrorAction SilentlyContinue) {
         Add-Warning 'Starfield is still running. Quit the game first so the logs are complete.'
         if (-not $NoPrompt) {
-            $go = Read-Host 'Collect anyway? [y/N]'
+            $go = Read-Answer 'Collect anyway? [y/N]'
             if ($go -notmatch '^[yY]') { Write-Host 'Stopped. Nothing was collected.'; exit 1 }
         }
     }
 
     if (-not $NoPrompt) {
-        if (-not $Note) { $Note = Read-Host 'What did you test? (e.g. "new quest, checks 1-12", Enter to skip)' }
+        if (-not $Note) { $Note = Read-Answer 'What did you test? (e.g. "new quest, checks 1-12", Enter to skip)' }
         if (-not $PSBoundParameters.ContainsKey('IncludeSaves') -and -not $PSBoundParameters.ContainsKey('SavePair')) {
-            $ans = Read-Host 'Include saves? p = before/after pair, y = newest save, Enter = none [p/y/N]'
+            $ans = Read-Answer 'Include saves? p = before/after pair, y = newest save, Enter = none [p/y/N]'
             if ($ans -match '^[pP]') { $SavePair = $true }
             elseif ($ans -match '^[yY]') { $IncludeSaves = $true }
         }
         if (-not $PSBoundParameters.ContainsKey('Redact')) {
-            $ans = Read-Host 'Hide your Windows user name, computer name and user folder in the copied files? [y/N]'
+            $ans = Read-Answer 'Hide your Windows user name, computer name and user folder in the copied files? [y/N]'
             if ($ans -match '^[yY]') {
                 $Redact = $true
                 # What was written before the answer gets the same rules.
