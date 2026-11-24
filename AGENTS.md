@@ -1,7 +1,7 @@
 # AGENTS.md: sf-log-collector for AI assistants
 
 Plain steps for an AI assistant helping someone use sf-log-collector. Every command here was run once on
-sf-log-collector 2.0.1 before release. The [README](README.md) has the full description.
+sf-log-collector 2.1.0 before release. The [README](README.md) has the full description.
 
 ## 1. What it is for
 
@@ -23,13 +23,13 @@ is running.
 
 ## 3. Install
 
-Download `sf-log-collector-2.0.1.zip` from https://github.com/taosecurity/sf-log-collector/releases and check it
+Download `sf-log-collector-2.1.0.zip` from https://github.com/taosecurity/sf-log-collector/releases and check it
 against the `.sha256` file:
 
-    certutil -hashfile sf-log-collector-2.0.1.zip SHA256
+    certutil -hashfile sf-log-collector-2.1.0.zip SHA256
 
-(In PowerShell, `(Get-FileHash sf-log-collector-2.0.1.zip).Hash` prints the same hash in capitals; compare without
-case.) Unpack it anywhere: everything is inside one folder, `sf-log-collector-2.0.1\`, and every command below runs
+(In PowerShell, `(Get-FileHash sf-log-collector-2.1.0.zip).Hash` prints the same hash in capitals; compare without
+case.) Unpack it anywhere: everything is inside one folder, `sf-log-collector-2.1.0\`, and every command below runs
 from there. Keep `Collect-StarfieldTestLogs.cmd` and `Collect-StarfieldTestLogs.ps1` in the same folder.
 
 ## 4. Prove the install works
@@ -38,7 +38,7 @@ The bundled test builds a fake Starfield setup in the temp folder and needs no g
 
     powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Collector.ps1
 
-It ends with `<N> passed, 0 failed` and exit code 0 (N is 154 on 2.0.1, a little lower if a test prints `skip`;
+It ends with `<N> passed, 0 failed` and exit code 0 (N is 193 on 2.1.0, a little lower if a test prints `skip`;
 what matters is `0 failed`). The test works in a new `%TEMP%\sflc-test-<random>` folder and deletes it at the end;
 it writes nothing else. On a player's PC, a dry run is the quick check (it writes a zip but doesn't move the
 "last run" marker):
@@ -55,7 +55,8 @@ goes on.
 
 All commands run from the unpacked folder in PowerShell. In `cmd.exe`, pass the same options to the `.cmd`.
 
-- Player, after quitting the game: double-click `Collect-StarfieldTestLogs.cmd` and answer the two questions.
+- Player, after quitting the game: double-click `Collect-StarfieldTestLogs.cmd` and answer the three questions
+  (what was tested, saves, and whether to hide the Windows user name; Enter means no for the last two).
 - The same with no questions, with a note:
 
       powershell -NoProfile -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -NoPrompt -Note "quest stuck at step 3"
@@ -64,6 +65,13 @@ All commands run from the unpacked folder in PowerShell. In `cmd.exe`, pass the 
 
       powershell -NoProfile -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -NoPrompt -IncludeSaves
       powershell -NoProfile -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -NoPrompt -SavePair
+
+- Before the player sends the zip to someone else or hands it to you: add `-Redact`, which replaces the Windows
+  user folder, user name, computer name and Steam account number in every copied text file with `%USERPROFILE%`,
+  `<user>`, `<computer>` and `userdata\<steam-id>`. Saves (which hold the character's name) and screenshots are
+  copied as they are, also with `-SavePair`:
+
+      powershell -NoProfile -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -NoPrompt -Redact -SavePair
 
 - Mod Organizer 2 (the instance folder holds `ModOrganizer.ini`):
 
@@ -95,7 +103,9 @@ the options.
 - `Documents\StarfieldLogs\StarfieldLogs-<yyyyMMdd-HHmmss>-<note>.zip` (`-OutDir` moves it). Inside:
   `manifest.json` (versions, counts, warnings, skipped files, every file's SHA-256, a listing of Data plugins and
   SFSE DLLs by name), `collector-log.txt`, and the folders `docs\`, `appdata\`, `game\`, `mo2\`, `vortex\`,
-  `downloads\`, `screenshots\`, `saves\`, `events.txt`. The README's table maps each to its source.
+  `downloads\`, `screenshots\`, `saves\`, `events.txt`. The README's table maps each to its source. With
+  `-Redact`, `manifest.json` has `"redact": true`, and each file that redaction changed has `"redacted": true`,
+  `size` and `sha256` of the copy in the zip, and `sourceSize` (the original's size).
 - `.last-run-<Windows user>` in the same folder as the zip (`Documents\StarfieldLogs`, or the `-OutDir` folder): the
   time of the last run (not written with `-DryRun`). Each output folder has its own marker, so a different
   `-OutDir` starts again with the 12-hour window.
@@ -121,8 +131,11 @@ file if given; `-Verbose` shows the same lines on screen. The log hides the Wind
 - It never copies `.exe .dll .pdb .dmp .esm .esp .esl .ba2` files. Report files over 50 MB are skipped unless
   `-IncludeLarge`.
 - It makes no network connections and uploads nothing. Sending the zip is up to the player.
-- It writes `%USERPROFILE%` in place of the Windows user folder in its own files (manifest, log, `events.txt`), but
-  copies logs as they are: tell the player to look inside before posting a zip in public.
+- It writes `%USERPROFILE%` in place of the Windows user folder in its own files (manifest, log, `events.txt`).
+  Without `-Redact` it copies logs as they are. With `-Redact` the copied text files are redacted too, but saves,
+  screenshots, files that don't look like text and the zip's entry names are not, a user name under 3 letters is
+  hidden only in `\Users\<name>` paths, and the zip's file name comes from the note as typed. Tell the player to
+  look inside before posting a zip in public.
 - Game Pass saves are in a container it can't read: export them first and pass `-SavesDir`.
 - Windows only.
 - The test script's `-Shell` takes `powershell`, `pwsh` or the full path of `powershell.exe` or `pwsh.exe`; a

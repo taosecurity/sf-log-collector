@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 # SPDX-FileCopyrightText: 2026 Richard Bejtlich
+
 <#
 .SYNOPSIS
     Collects Starfield logs, settings and (optionally) saves into one zip you can send to a mod author.
@@ -59,8 +60,15 @@
     Also write the troubleshooting log to this file (it is always inside the zip as
     collector-log.txt). The log is added to the end of the file if it exists. -Log is
     the short form. Add -Verbose to see the same lines on screen as it runs.
+.PARAMETER Redact
+    Hide your Windows user name, computer name, user folder and Steam account number
+    in every text file the collector copies (logs, plugins.txt, INIs, crash logs,
+    Vortex exports) and in its own manifest and log. They become %USERPROFILE%,
+    <user>, <computer> and userdata\<steam-id>. Saves, screenshots and files that
+    don't look like text are copied as they are, and zip entry names are not changed.
+    Plugin names and form IDs are never touched. Asked for if not given (Enter = no).
 .PARAMETER NoPrompt
-    Ask no questions; use the defaults.
+    Ask no questions; use the defaults (no saves, no -Redact).
 .PARAMETER DryRun
     Build the zip but don't update the "last run" marker.
 #>
@@ -84,12 +92,13 @@ param(
     [string]$OutDir = '',
     [Alias('Log')]
     [string]$LogFile = '',
+    [switch]$Redact,
     [switch]$NoPrompt,
     [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = '2.0.1'
+$ScriptVersion = '2.1.0'
 $LargeLimit = 50MB
 $MaxScreenshots = 40
 $BlockedExt = @('.exe', '.dll', '.pdb', '.dmp', '.esm', '.esp', '.esl', '.ba2')
@@ -106,6 +115,7 @@ $script:Since = $null
 
 # Hide the Windows user folder in what we write, so a shared zip doesn't carry it in every path.
 $script:ProfileRx = $null
+$profForms = @()
 # The lookahead stops C:\Users\a from matching inside C:\Users\ab or C:\Users\a.b, but still matches
 # before a backslash, punctuation, a line break or the end of the text.
 if ($env:USERPROFILE) {
@@ -129,11 +139,155 @@ if ($env:USERPROFILE) {
 # The marker file carries the Windows user name: .last-run-<user>.
 $script:MarkerRx = $null
 if ($env:USERNAME) { $script:MarkerRx = '(?i)\.last-run-' + [regex]::Escape($env:USERNAME) + '(?![\w~-])' }
+
+# -Redact: the rules, in the order they are applied. The user folder goes first (in the forms logs
+# and JSON write it: \, / and \\), so a whole path becomes %USERPROFILE% rather than C:\Users\<user>.
+# Names are whole words (no letter, digit or _ either side), any case. A name under 3 characters is
+# hidden only after \Users\, so a user called "ui" doesn't turn every "UI" in a log into <user>.
+$script:RedactRules = New-Object System.Collections.ArrayList
+$script:RedactNotes = New-Object System.Collections.ArrayList
+function Add-RedactRule([string]$Pattern, [string]$With) {
+    $rx = New-Object System.Text.RegularExpressions.Regex($Pattern, [System.Text.RegularExpressions.RegexOptions]'IgnoreCase, CultureInvariant')
+    [void]$script:RedactRules.Add(@{ rx = $rx; with = $With })
+}
+if ($profForms.Count -gt 0) {
+    $redForms = foreach ($f in $profForms) { $f; ($f -replace '\\', '/'); ($f -replace '\\', '\\') }
+    $redForms = @($redForms | Select-Object -Unique | Sort-Object Length -Descending | ForEach-Object { [regex]::Escape($_) })
+    Add-RedactRule ('(?:' + ($redForms -join '|') + ')(?!\.?[\w~-])') '%USERPROFILE%'
+}
+if ($script:MarkerRx) { Add-RedactRule $script:MarkerRx.Substring(4) '.last-run-%USERNAME%' }
+$userNames = @()
+if ($env:USERNAME) { $userNames += $env:USERNAME }
+if ($env:USERPROFILE) {
+    $leaf = Split-Path $env:USERPROFILE.TrimEnd('\') -Leaf
+    if ($leaf -and -not ($userNames -contains $leaf)) { $userNames += $leaf }
+}
+# Longest first: a profile folder named <user>-something is replaced whole, not as <user>-something.
+foreach ($u in @($userNames | Sort-Object Length -Descending)) {
+    if ($u.Length -ge 3) { Add-RedactRule ('(?<!\w)' + [regex]::Escape($u) + '(?!\w)') '<user>' }
+    else {
+        Add-RedactRule ('(?<=[\\/]{1,2}Users[\\/]{1,2})' + [regex]::Escape($u) + '(?!\.?[\w~-])') '<user>'
+        [void]$script:RedactNotes.Add('redact: the user name is under 3 characters, so it is hidden only in \Users\<name> paths')
+    }
+}
+if ($env:COMPUTERNAME) {
+    if ($env:COMPUTERNAME.Length -ge 3) { Add-RedactRule ('(?<!\w)' + [regex]::Escape($env:COMPUTERNAME) + '(?!\w)') '<computer>' }
+    else { [void]$script:RedactNotes.Add('redact: the computer name is under 3 characters, so it is not replaced') }
+}
+Add-RedactRule '(?<=(?<!\w)userdata[\\/]{1,2})\d+(?!\w)' '<steam-id>'
+
+# Applies every -Redact rule; adds the number of replacements to $Hits. Never logs the values.
+function ConvertTo-RedactedText([string]$Text, [ref]$Hits) {
+    foreach ($r in $script:RedactRules) {
+        $c = $r.rx.Matches($Text).Count
+        if ($c -gt 0) { $Text = $r.rx.Replace($Text, $r.with); $Hits.Value += $c }
+    }
+    return $Text
+}
+
 function Hide-Path([string]$Text) {
     if ($null -eq $Text) { return $null }
+    if ($Redact) { $n = 0; return (ConvertTo-RedactedText $Text ([ref]$n)) }
     if ($script:ProfileRx) { $Text = $Text -replace $script:ProfileRx, '%USERPROFILE%' }
     if ($script:MarkerRx) { $Text = $Text -replace $script:MarkerRx, '.last-run-%USERNAME%' }
     return $Text
+}
+
+# -Redact on a staged copy. Saves and screenshots never reach this; a file is text when it starts with
+# a UTF-16 byte-order mark or has no zero byte in its first 64 KB.
+$RedactSkipExt = @('.sfs', '.png', '.jpg', '.jpeg', '.bmp')
+$script:RedactFiles = 0
+$script:RedactTotal = 0
+$script:RedactLeft = 0
+
+# Where the last complete line in $Data ends (0 = no line break yet). UTF-16 needs the 0A as a whole
+# character at an even offset; every piece starts at an even offset after the byte-order mark.
+function Find-LineEnd([byte[]]$Data, [int]$Unit, [bool]$BigEndian) {
+    $i = $Data.Length - 1
+    while ($i -ge 0) {
+        $i = [Array]::LastIndexOf($Data, [byte]10, $i)
+        if ($i -lt 0) { return 0 }
+        if ($Unit -eq 1) { return $i + 1 }
+        if ($BigEndian) { if ($i % 2 -eq 1 -and $Data[$i - 1] -eq 0) { return $i + 1 } }
+        elseif ($i % 2 -eq 0 -and $i + 1 -lt $Data.Length -and $Data[$i + 1] -eq 0) { return $i + 2 }
+        $i--
+    }
+    return 0
+}
+
+# Reads $Path in pieces that end at a line break (no rule crosses one), writes the redacted text to
+# $Tmp with the same byte-order mark and encoding, and returns the number of replacements.
+function Invoke-RedactStream([string]$Path, [string]$Tmp, [int]$Bom, [System.Text.Encoding]$Enc, [int]$Unit, [bool]$BigEndian) {
+    $hits = 0
+    $in = [System.IO.File]::OpenRead($Path)
+    try {
+        $out = [System.IO.File]::Create($Tmp)
+        try {
+            if ($Bom -gt 0) {
+                $pre = New-Object byte[] $Bom
+                [void]$in.Read($pre, 0, $Bom)
+                $out.Write($pre, 0, $Bom)
+            }
+            $carry = New-Object byte[] 0
+            $buf = New-Object byte[] (4MB)
+            while ($true) {
+                $k = $in.Read($buf, 0, $buf.Length)
+                $eof = $k -le 0
+                if ($eof) { $k = 0 }
+                $data = New-Object byte[] ($carry.Length + $k)
+                [Array]::Copy($carry, $data, $carry.Length)
+                if ($k -gt 0) { [Array]::Copy($buf, 0, $data, $carry.Length, $k) }
+                $cut = $(if ($eof) { $data.Length } else { Find-LineEnd $data $Unit $BigEndian })
+                if ($cut -gt 0) {
+                    $n = 0
+                    $new = ConvertTo-RedactedText ($Enc.GetString($data, 0, $cut)) ([ref]$n)
+                    $hits += $n
+                    $bytes = $Enc.GetBytes($new)
+                    $out.Write($bytes, 0, $bytes.Length)
+                }
+                $carry = New-Object byte[] ($data.Length - $cut)
+                [Array]::Copy($data, $cut, $carry, 0, $carry.Length)
+                if ($eof) { break }
+            }
+        } finally { $out.Dispose() }
+    } finally { $in.Dispose() }
+    return $hits
+}
+
+# Redacts a staged copy in place. Returns -1 when it doesn't look like text (left as is), else the
+# number of replacements; with none, the file is left byte-identical. Throws when it can't be done.
+function Invoke-RedactFile([string]$Path) {
+    $head = New-Object byte[] 65536
+    $got = 0
+    $fs = [System.IO.File]::OpenRead($Path)
+    try {
+        while ($got -lt $head.Length) { $k = $fs.Read($head, $got, $head.Length - $got); if ($k -le 0) { break }; $got += $k }
+    } finally { $fs.Dispose() }
+    $bom = 0; $kind = 'plain'
+    if ($got -ge 3 -and $head[0] -eq 0xEF -and $head[1] -eq 0xBB -and $head[2] -eq 0xBF) { $bom = 3; $kind = 'utf8' }
+    elseif ($got -ge 2 -and $head[0] -eq 0xFF -and $head[1] -eq 0xFE) { $bom = 2; $kind = 'utf16le' }
+    elseif ($got -ge 2 -and $head[0] -eq 0xFE -and $head[1] -eq 0xFF) { $bom = 2; $kind = 'utf16be' }
+    if ($kind -notlike 'utf16*' -and $got -gt 0 -and [Array]::IndexOf($head, [byte]0, 0, $got) -ge 0) { return -1 }
+    $tmp = $Path + '.redact-tmp'
+    try {
+        if ($kind -like 'utf16*') {
+            $be = ($kind -eq 'utf16be')
+            $hits = Invoke-RedactStream $Path $tmp $bom (New-Object System.Text.UnicodeEncoding($be, $false, $true)) 2 $be
+        } else {
+            # UTF-8 when every byte is valid UTF-8, otherwise Latin-1, where every byte round-trips.
+            try { $hits = Invoke-RedactStream $Path $tmp $bom (New-Object System.Text.UTF8Encoding($false, $true)) 1 $false }
+            catch {
+                $e = $_.Exception
+                while ($e -and -not ($e -is [System.Text.DecoderFallbackException])) { $e = $e.InnerException }
+                if (-not $e) { throw }
+                $hits = Invoke-RedactStream $Path $tmp $bom ([System.Text.Encoding]::GetEncoding(28591)) 1 $false
+            }
+        }
+        if ($hits -gt 0) { [System.IO.File]::Copy($tmp, $Path, $true) }
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force }
+    }
+    return $hits
 }
 
 function Write-Log([string]$Text) {
@@ -171,18 +325,43 @@ function Copy-ToPackage {
             try { $in.CopyTo($out) } finally { $out.Dispose() }
         } finally { $in.Dispose() }
         (Get-Item -LiteralPath $target).LastWriteTime = $File.LastWriteTime
+        $pkg = ($Dest -replace '\\', '/')
+        $hits = 0
+        if ($Redact -and $RedactSkipExt -notcontains $File.Extension.ToLowerInvariant()) {
+            # Fail closed: a text file that can't be redacted is left out, never sent unredacted.
+            try { $hits = Invoke-RedactFile $target }
+            catch {
+                $why = $_.Exception.Message
+                Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+                Add-Warning "Left out $($File.FullName) because it could not be redacted: $why"
+                return $false
+            }
+            if ($hits -lt 0) { $script:RedactLeft++; Write-Log "redact: left as is (does not look like text): $pkg" }
+            elseif ($hits -gt 0) {
+                (Get-Item -LiteralPath $target).LastWriteTime = $File.LastWriteTime
+                $script:RedactFiles++; $script:RedactTotal += $hits
+                Write-Log "redact: $pkg ($hits replacements)"
+            }
+        }
         # .NET rather than Get-FileHash: 5.1 started from PowerShell 7 can fail to load that cmdlet.
         $sha = [System.Security.Cryptography.SHA256]::Create()
         $fs = [System.IO.File]::OpenRead($target)
         try { $hash = ([System.BitConverter]::ToString($sha.ComputeHash($fs)) -replace '-', '').ToLowerInvariant() }
         finally { $fs.Dispose(); $sha.Dispose() }
-        [void]$script:Collected.Add([ordered]@{
-            package  = ($Dest -replace '\\', '/')
+        $entry = [ordered]@{
+            package  = $pkg
             source   = (Hide-Path $File.FullName)
             size     = $File.Length
             modified = $File.LastWriteTime.ToString('s')
             sha256   = $hash
-        })
+        }
+        if ($hits -gt 0) {
+            # size and sha256 describe the file in the zip; sourceSize is the original's size.
+            $entry.size = (Get-Item -LiteralPath $target).Length
+            $entry.sourceSize = $File.Length
+            $entry.redacted = $true
+        }
+        [void]$script:Collected.Add($entry)
         Write-Log "copy: $($File.FullName) -> $Dest ($($File.Length) bytes)"
         return $true
     } catch {
@@ -612,8 +791,22 @@ try {
             if ($ans -match '^[pP]') { $SavePair = $true }
             elseif ($ans -match '^[yY]') { $IncludeSaves = $true }
         }
+        if (-not $PSBoundParameters.ContainsKey('Redact')) {
+            $ans = Read-Host 'Hide your Windows user name, computer name and user folder in the copied files? [y/N]'
+            if ($ans -match '^[yY]') {
+                $Redact = $true
+                # What was written before the answer gets the same rules.
+                foreach ($list in @($script:LogLines, $script:Warnings, $script:Skipped)) {
+                    for ($i = 0; $i -lt $list.Count; $i++) { $list[$i] = Hide-Path $list[$i] }
+                }
+            }
+        }
     }
-    Write-Log "note: $Note; saves: newest=$([bool]$IncludeSaves) pair=$([bool]$SavePair)"
+    Write-Log "note: $Note; saves: newest=$([bool]$IncludeSaves) pair=$([bool]$SavePair); redact: $([bool]$Redact)"
+    if ($Redact) {
+        Write-Log 'redact: on; saves, screenshots and files that do not look like text are copied as they are, and zip entry names are not changed'
+        foreach ($rn in $script:RedactNotes) { Write-Log $rn }
+    }
 
     # Folders
     $Docs = [Environment]::GetFolderPath('MyDocuments')
@@ -899,7 +1092,8 @@ try {
     $manifest = [ordered]@{
         tool      = "Collect-StarfieldTestLogs $ScriptVersion"
         created   = $Now.ToString('s')
-        note      = $Note
+        note      = $(if ($Redact) { Hide-Path $Note } else { $Note })
+        redact    = [bool]$Redact
         window    = [ordered]@{ since = $script:Since.ToString('s'); how = $WindowText }
         dryRun    = [bool]$DryRun
         store     = $Store
@@ -920,6 +1114,7 @@ try {
     # ------------------------------------------------------------ zip
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $ZipPath = Join-Path $OutDir $ZipName
+    if ($Redact) { Write-Log "redact: $($script:RedactFiles) file(s) changed, $($script:RedactTotal) replacement(s); $($script:RedactLeft) file(s) left as is because they do not look like text" }
     Write-Log "zip: $ZipPath"
     [System.IO.File]::WriteAllLines((Join-Path $script:Stage 'collector-log.txt'), [string[]]$script:LogLines, $utf8)
     if (Test-Path -LiteralPath $ZipPath) { Remove-Item -LiteralPath $ZipPath -Force }
@@ -949,6 +1144,10 @@ try {
     $parts = foreach ($k in $counts.Keys) { if ($counts[$k] -gt 0) { "$k $($counts[$k])" } }
     if ($parts) { Write-Host ('  Contents: ' + ($parts -join ', ')) }
     if ($script:Skipped.Count -gt 0) { Write-Host "  Skipped : $($script:Skipped.Count) file(s) (see manifest.json)" }
+    if ($Redact) {
+        $left = $(if ($script:RedactLeft -gt 0) { ", and $($script:RedactLeft) file(s) that don't look like text" } else { '' })
+        Write-Host "  Redacted: $($script:RedactFiles) file(s) changed; saves and screenshots left as they are$left"
+    }
     if ($script:Warnings.Count -gt 0) {
         Write-Host ''
         Write-Host 'Warnings:' -ForegroundColor Yellow

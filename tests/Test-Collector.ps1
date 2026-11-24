@@ -96,7 +96,9 @@ function New-File([string]$Rel, [string]$Text = 'x', [double]$AgeHours = 0) {
 }
 
 function Invoke-Collector([string[]]$CollectorArgs) {
-    $out = & $Shell -NoProfile -ExecutionPolicy Bypass -File $Collector @CollectorArgs 2>&1 | Out-String
+    # An error the collector prints must become a failed check, not stop Windows PowerShell 5.1 here.
+    $ErrorActionPreference = 'Continue'
+    $out =& $Shell -NoProfile -ExecutionPolicy Bypass -File $Collector @CollectorArgs 2>&1 | Out-String
     return @{ code = $LASTEXITCODE; text = $out }
 }
 
@@ -452,6 +454,188 @@ try {
     Assert ($r.code -eq 0) "exit code 0 (got $($r.code))"
     $z = Open-Zip $out5e
     Assert (@($z.manifest.warnings | Where-Object { $_ -match 'MO2 profile folder not found: [A-Z]:\\sflc-no-such-root\\Test' }).Count -eq 1) 'drive-root profiles folder read as a local path'
+
+    # ---------------- 8: -Redact (fake user, computer and profile set for the child run)
+    Write-Host ''
+    Write-Host 'Test 8: -Redact'
+    function Get-Sha([string]$Path) {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $fs = [System.IO.File]::OpenRead($Path)
+        try { return ([System.BitConverter]::ToString($sha.ComputeHash($fs)) -replace '-', '').ToLowerInvariant() }
+        finally { $fs.Dispose(); $sha.Dispose() }
+    }
+    function New-Bytes([string]$Rel, [byte[]]$Bytes) {
+        $p = Join-Path $Root $Rel
+        $d = Split-Path $p -Parent
+        if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) }
+        [System.IO.File]::WriteAllBytes($p, $Bytes)
+        return $p
+    }
+    function Invoke-WithEnv([hashtable]$Env, [scriptblock]$Do) {
+        $old = @{}
+        foreach ($k in $Env.Keys) { $old[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $Env[$k]) }
+        try { return (& $Do) } finally { foreach ($k in $old.Keys) { [Environment]::SetEnvironmentVariable($k, $old[$k]) } }
+    }
+    $fUser = 'Zqxuser'; $fPc = 'ZQXPC77'; $fSteam = '123456789'
+    $fLeafRel = 'R\Users\Zqxuser-longprofile'
+    $fProf = Join-Path $Root $fLeafRel
+    [void](New-Item -ItemType Directory -Path $fProf -Force)
+    $fShort = $fProf
+    try { $fso = New-Object -ComObject Scripting.FileSystemObject; $fShort = $fso.GetFolder($fProf).ShortPath.TrimEnd('\') } catch { }
+    $fSlash = $fProf -replace '\\', '/'
+    $fJson = $fProf -replace '\\', '\\'
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    $docsRel = "$fLeafRel\Documents\My Games\Starfield"
+    $papText = "Papyrus log opened (PC-64)`r`nscript at $fProf\Documents\x.pex`r`nuser $fUser on $fPc, not ${fUser}s or x$fPc`r`n" +
+               "steam C:\Program Files (x86)\Steam\userdata\$fSteam\760`r`nMyMod.esm 0x01000ABC SomeQuest`r`nbackup in D:\Old\Zqxuser-longprofile\saves`r`n"
+    $pap8 = New-File "$docsRel\Logs\Script\Papyrus.0.log" $papText
+    New-File "$docsRel\StarfieldCustom.ini" "[Papyrus]`r`nbEnableLogging=1`r`nsPath=$fSlash/Documents`r`n" | Out-Null
+    $vtx8 = New-File "$fLeafRel\Downloads\vortex-starfield-default-backup-20261119.json" ('{"path":"' + $fJson + '\\Downloads\\a.zip","machine":"' + $fPc + '"}')
+    New-File "$docsRel\SFSE\Logs\report.zzz" "unknown extension at $fProf\x`r`n" | Out-Null
+    New-File "$docsRel\SFSE\Logs\short.txt" "temp $fShort\AppData\Local\Temp\x.tmp`r`n" | Out-Null
+    $plain8 = New-File "$docsRel\SFSE\Logs\plain.txt" "nothing private here`r`n"
+    $wide = New-Object System.Text.StringBuilder
+    [void]$wide.Append("start $fProf\a on $fPc`r`n")
+    for ($i = 0; $i -lt 90000; $i++) { [void]$wide.Append("filler line $i of the wide log`r`n") }
+    [void]$wide.Append("end $fProf\b`r`n")
+    $wide8 = Join-Path $Root "$docsRel\SFSE\Logs\wide.log"
+    [System.IO.File]::WriteAllText($wide8, $wide.ToString(), [System.Text.Encoding]::Unicode)   # UTF-16 LE with BOM, over 4 MB
+    $big = New-Object System.Text.StringBuilder
+    for ($i = 0; $i -lt 300000; $i++) {
+        if ($i % 50000 -eq 0) { [void]$big.Append("hit $i $fProf\c by $fUser`n") }
+        [void]$big.Append("filler line $i of the big log`n")
+    }
+    $big8 = New-File "$docsRel\SFSE\Logs\big.log" $big.ToString()                          # several 4 MB pieces
+    $bom8 = Join-Path $Root "$docsRel\SFSE\Logs\bom.txt"
+    [System.IO.File]::WriteAllText($bom8, "bom $fProf\d`r`n", (New-Object System.Text.UTF8Encoding($true)))
+    $ansiBytes = [byte[]](@([byte][char]'c', [byte][char]'a', [byte][char]'f', 0xE9, 32) + [System.Text.Encoding]::ASCII.GetBytes("$fProf\e`r`n"))
+    $ansi8 = New-Bytes "$docsRel\SFSE\Logs\ansi.txt" $ansiBytes
+    $blob8 = New-Bytes "$docsRel\SFSE\Logs\blob.bin" ([byte[]](@(0, 1, 2) + [System.Text.Encoding]::ASCII.GetBytes($fProf)))
+    $save8 = New-File "$fLeafRel\Saves\Save1_ABCD1234_000102_20261119100000_1_2.sfs" "save at $fProf by $fUser"
+    $shot8 = New-File "$fLeafRel\Shots\s.png" "png at $fProf"
+    $args8 = @('-NoPrompt', '-Hours', '2', '-MyGamesDir', (Join-Path $Root $docsRel), '-PluginsTxtDir', (Join-Path $fProf 'AppData\Local\Starfield'),
+        '-DownloadsDir', (Join-Path $fProf 'Downloads'), '-ScreenshotDir', (Join-Path $fProf 'Shots'), '-SavesDir', (Join-Path $fProf 'Saves'),
+        '-IncludeSaves', '-GamePath', (Join-Path $Root 'Game'), '-Note', "redact check by $fUser", '-DryRun')
+    $env8 = @{ USERPROFILE = $fProf; USERNAME = $fUser; COMPUTERNAME = $fPc }
+    $out8 = Join-Path $Root 'out8'
+    $log8 = Join-Path $Root 'run8.log'
+    $r = Invoke-WithEnv $env8 { Invoke-Collector ($args8 + @('-Redact', '-OutDir', $out8, '-LogFile', $log8)) }
+    Assert ($r.code -eq 0) "-Redact run exit code 0 (got $($r.code))"
+    if ($r.code -ne 0) { Write-Host $r.text }
+    $secretRx = @(
+        ('(?i)' + [regex]::Escape($fProf)), ('(?i)' + [regex]::Escape($fSlash)), ('(?i)' + [regex]::Escape($fJson)),
+        ('(?i)' + [regex]::Escape($fShort)), ('(?i)(?<!\w)' + $fUser + '(?!\w)'), ('(?i)(?<!\w)' + $fPc + '(?!\w)'),
+        ('(?i)Zqxuser-longprofile'), $fSteam)
+    $z8 = $null
+    if (@(Get-ChildItem -LiteralPath $out8 -Filter '*.zip' -ErrorAction SilentlyContinue).Count -gt 0) { $z8 = Open-Zip $out8 }
+    $leftAlone = @('saves/Save1_ABCD1234_000102_20261119100000_1_2.sfs', 'screenshots/s.png', 'docs/SFSE/Logs/blob.bin')
+    if ($z8) {
+        $leaks = @()
+        foreach ($name in $z8.names) {
+            if ($leftAlone -contains $name) { continue }
+            $bytes = [System.IO.File]::ReadAllBytes((Join-Path $z8.dir $name))
+            $text = $(if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) { [System.Text.Encoding]::Unicode.GetString($bytes) }
+                      else { [System.Text.Encoding]::GetEncoding(28591).GetString($bytes) })
+            foreach ($rx in $secretRx) { if ($text -match $rx) { $leaks += "$name ($rx)" } }
+        }
+        Assert ($leaks.Count -eq 0) "no fake user, computer, profile or Steam ID in any text entry ($($leaks -join '; '))"
+        Assert ($z8.names.Count -ge 15) "the redacted zip has the files ($($z8.names.Count))"
+        $p8 = [System.IO.File]::ReadAllText((Join-Path $z8.dir 'docs\Logs\Script\Papyrus.0.log'))
+        Assert ($p8.Contains('script at %USERPROFILE%\Documents\x.pex')) 'profile path becomes %USERPROFILE%'
+        Assert ($p8.Contains('user <user> on <computer>, not Zqxusers or xZQXPC77')) 'names become <user> and <computer>, whole words only'
+        Assert ($p8.Contains('userdata\<steam-id>\760')) 'Steam account folder becomes userdata\<steam-id>'
+        Assert ($p8.Contains('MyMod.esm 0x01000ABC SomeQuest')) 'plugin names and form IDs untouched'
+        Assert ($p8.Contains('D:\Old\<user>\saves')) 'profile folder name elsewhere becomes <user>'
+        Assert ([System.IO.File]::ReadAllText((Join-Path $z8.dir 'docs\StarfieldCustom.ini')).Contains('sPath=%USERPROFILE%/Documents')) 'forward-slash form hidden'
+        Assert ([System.IO.File]::ReadAllText((Join-Path $z8.dir 'vortex\vortex-starfield-default-backup-20261119.json')).Contains('"path":"%USERPROFILE%\\Downloads\\a.zip","machine":"<computer>"')) 'JSON \\ form hidden'
+        Assert ([System.IO.File]::ReadAllText((Join-Path $z8.dir 'docs\SFSE\Logs\report.zzz')).Contains('%USERPROFILE%\x')) 'a file with an unknown extension under SFSE\Logs is redacted'
+        if ($fShort -ne $fProf) { Assert ([System.IO.File]::ReadAllText((Join-Path $z8.dir 'docs\SFSE\Logs\short.txt')).Contains('temp %USERPROFILE%\AppData')) '8.3 short form hidden' }
+        else { Write-Host '  skip 8.3 check (this volume makes no short names)' }
+        $wb = [System.IO.File]::ReadAllBytes((Join-Path $z8.dir 'docs\SFSE\Logs\wide.log'))
+        $wt = [System.Text.Encoding]::Unicode.GetString($wb, 2, $wb.Length - 2)
+        Assert ($wb[0] -eq 0xFF -and $wb[1] -eq 0xFE -and $wt.StartsWith("start %USERPROFILE%\a on <computer>`r`n") -and $wt.EndsWith("end %USERPROFILE%\b`r`n")) 'UTF-16 file keeps its byte-order mark and is redacted'
+        Assert (([regex]::Matches($wt, 'filler line \d+ of the wide log')).Count -eq 90000) 'UTF-16 file over 4 MB keeps every line'
+        $bt = [System.IO.File]::ReadAllText((Join-Path $z8.dir 'docs\SFSE\Logs\big.log'))
+        Assert (([regex]::Matches($bt, 'hit \d+ %USERPROFILE%\\c by <user>')).Count -eq 6 -and ([regex]::Matches($bt, "`n")).Count -eq 300006) 'big file redacted across 4 MB pieces, every line kept'
+        $bb = [System.IO.File]::ReadAllBytes((Join-Path $z8.dir 'docs\SFSE\Logs\bom.txt'))
+        Assert ($bb[0] -eq 0xEF -and $bb[1] -eq 0xBB -and $bb[2] -eq 0xBF -and $utf8.GetString($bb, 3, $bb.Length - 3) -eq "bom %USERPROFILE%\d`r`n") 'UTF-8 byte-order mark kept'
+        $ab = [System.IO.File]::ReadAllBytes((Join-Path $z8.dir 'docs\SFSE\Logs\ansi.txt'))
+        $want = [byte[]](@([byte][char]'c', [byte][char]'a', [byte][char]'f', 0xE9, 32) + [System.Text.Encoding]::ASCII.GetBytes("%USERPROFILE%\e`r`n"))
+        Assert ([System.BitConverter]::ToString($ab) -eq [System.BitConverter]::ToString($want)) 'a non-UTF-8 byte (Latin-1) is kept as it was'
+        Assert ((Get-Sha (Join-Path $z8.dir 'docs\SFSE\Logs\plain.txt')) -eq (Get-Sha $plain8)) 'a file with nothing to hide stays byte-identical'
+        Assert ((Get-Sha (Join-Path $z8.dir 'docs\SFSE\Logs\blob.bin')) -eq (Get-Sha $blob8)) 'a binary-looking file is left as it is'
+        Assert ((Get-Sha (Join-Path $z8.dir 'saves\Save1_ABCD1234_000102_20261119100000_1_2.sfs')) -eq (Get-Sha $save8)) 'the save is left as it is'
+        Assert ((Get-Sha (Join-Path $z8.dir 'screenshots\s.png')) -eq (Get-Sha $shot8)) 'the screenshot is left as it is'
+        $m8 = $z8.manifest
+        Assert ($m8.redact -eq $true) 'manifest says redact: true'
+        Assert ($m8.note -eq 'redact check by <user>') "the note is redacted in the manifest ($($m8.note))"
+        $pe = @($m8.files | Where-Object { $_.package -eq 'docs/Logs/Script/Papyrus.0.log' })[0]
+        $pz = Join-Path $z8.dir 'docs\Logs\Script\Papyrus.0.log'
+        Assert ($pe.redacted -eq $true -and $pe.sourceSize -eq (Get-Item -LiteralPath $pap8).Length -and $pe.size -eq (Get-Item -LiteralPath $pz).Length -and $pe.sha256 -eq (Get-Sha $pz)) 'manifest: redacted, sourceSize, and size and sha256 of the zip copy'
+        $ple = @($m8.files | Where-Object { $_.package -eq 'docs/SFSE/Logs/plain.txt' })[0]
+        Assert ($null -eq $ple.redacted -and $null -eq $ple.sourceSize) 'manifest: an unchanged file has no redacted fields'
+        Assert (@($m8.files | Where-Object { $_.source -notmatch '^(%USERPROFILE%|[A-Za-z]:\\)' }).Count -eq 0 -and @($m8.files | Where-Object { $_.source -like '%USERPROFILE%*' }).Count -ge 10) 'manifest sources start with %USERPROFILE%'
+        $cl8 = [System.IO.File]::ReadAllText((Join-Path $z8.dir 'collector-log.txt'))
+        Assert ($cl8 -match 'redact: docs/Logs/Script/Papyrus\.0\.log \(\d+ replacements\)' -and $cl8 -match 'redact: left as is \(does not look like text\): docs/SFSE/Logs/blob\.bin') 'collector log counts replacements per file and names the left-alone file'
+        Assert ($cl8 -match '\.last-run-%USERNAME%') 'collector log still names the marker as .last-run-%USERNAME%'
+    } else { Assert $false 'the -Redact run made a zip' }
+    $l8 = $(if (Test-Path -LiteralPath $log8) { [System.IO.File]::ReadAllText($log8) } else { $fUser })
+    Assert (-not (@($secretRx | Where-Object { $l8 -match $_ }).Count)) 'the -LogFile copy has no fake user, computer or profile'
+    Assert ($r.text -match 'Redacted: \d+ file\(s\) changed; saves and screenshots left as they are') 'summary has the Redacted line'
+
+    # 8b: the same files without -Redact are copied exactly as they are
+    $out8b = Join-Path $Root 'out8b'
+    $r = Invoke-WithEnv $env8 { Invoke-Collector ($args8 + @('-OutDir', $out8b)) }
+    Assert ($r.code -eq 0) "run without -Redact exit code 0 (got $($r.code))"
+    $z8b = Open-Zip $out8b
+    $same = $true
+    foreach ($pair in @(@('docs/Logs/Script/Papyrus.0.log', $pap8), @('vortex/vortex-starfield-default-backup-20261119.json', $vtx8),
+                        @('docs/SFSE/Logs/wide.log', $wide8), @('docs/SFSE/Logs/big.log', $big8), @('docs/SFSE/Logs/ansi.txt', $ansi8))) {
+        $e = @($z8b.manifest.files | Where-Object { $_.package -eq $pair[0] })[0]
+        if (-not $e -or $e.sha256 -ne (Get-Sha $pair[1]) -or (Get-Sha (Join-Path $z8b.dir $pair[0])) -ne (Get-Sha $pair[1])) { $same = $false }
+    }
+    Assert $same 'without -Redact the copies are byte-identical to the originals'
+    Assert ($z8b.manifest.redact -eq $false -and @($z8b.manifest.files | Where-Object { $_.redacted }).Count -eq 0) 'without -Redact: redact false, no file marked redacted'
+    Assert (-not ($r.text -match 'Redacted:')) 'without -Redact: no Redacted line'
+
+    # 8c: a two-letter user name is hidden only in \Users\<name> paths
+    $sProf = Join-Path $Root 'S\Users\zq'
+    [void](New-Item -ItemType Directory -Path $sProf -Force)
+    New-File 'S\MyGames\Logs\Script\Papyrus.0.log' "UI zq button`r`nfile D:\Users\zq\x.txt`r`n" | Out-Null
+    New-File 'S\MyGames\StarfieldCustom.ini' "[Papyrus]`r`nbEnableLogging=1`r`n" | Out-Null
+    $out8c = Join-Path $Root 'out8c'
+    $r = Invoke-WithEnv @{ USERPROFILE = $sProf; USERNAME = 'zq'; COMPUTERNAME = $fPc } {
+        Invoke-Collector @('-NoPrompt', '-Hours', '2', '-MyGamesDir', (Join-Path $Root 'S\MyGames'), '-PluginsTxtDir', (Join-Path $Root 'S\none'),
+            '-DownloadsDir', (Join-Path $Root 'S\none'), '-ScreenshotDir', (Join-Path $Root 'S\none'), '-GamePath', (Join-Path $Root 'Game'),
+            '-Redact', '-DryRun', '-OutDir', $out8c) }
+    Assert ($r.code -eq 0) "two-letter name run exit code 0 (got $($r.code))"
+    $p8c = ''; $l8c = ''
+    if (@(Get-ChildItem -LiteralPath $out8c -Filter '*.zip' -ErrorAction SilentlyContinue).Count -gt 0) {
+        $z8c = Open-Zip $out8c
+        $p8c = [System.IO.File]::ReadAllText((Join-Path $z8c.dir 'docs\Logs\Script\Papyrus.0.log'))
+        $l8c = [System.IO.File]::ReadAllText((Join-Path $z8c.dir 'collector-log.txt'))
+    }
+    Assert ($p8c -eq "UI zq button`r`nfile D:\Users\<user>\x.txt`r`n") "two-letter name replaced only in the path ($($p8c.Trim() -replace "`r`n", ' | '))"
+    Assert ($l8c -match 'under 3 characters') 'collector log says the short name is hidden only in paths'
+
+    # 8d: double-click: the new question turns -Redact on with y and stays off with Enter
+    $out8d = Join-Path $Root 'out8d'
+    $ask = @('-Hours', '2', '-MyGamesDir', (Join-Path $Root 'S\MyGames'), '-PluginsTxtDir', (Join-Path $Root 'S\none'),
+        '-DownloadsDir', (Join-Path $Root 'S\none'), '-ScreenshotDir', (Join-Path $Root 'S\none'), '-GamePath', (Join-Path $Root 'Game'),
+        '-Note', 'asked', '-IncludeSaves', '-SavesDir', (Join-Path $Root 'S\none'), '-DryRun', '-OutDir', $out8d)
+    function Invoke-Asked([string]$Answer) {
+        $ErrorActionPreference = 'Continue'
+        $o = $Answer | & $Shell -NoProfile -ExecutionPolicy Bypass -File $Collector @ask 2>&1 | Out-String
+        $c = $LASTEXITCODE
+        $red = $null
+        $zp = @(Get-ChildItem -LiteralPath $out8d -Filter '*.zip' -ErrorAction SilentlyContinue)
+        if ($zp.Count -gt 0) { $red = (Open-Zip $out8d).manifest.redact; Remove-Item -LiteralPath $out8d -Recurse -Force }
+        return @{ code = $c; text = $o; redact = $red }
+    }
+    $a = Invoke-Asked "y`n"
+    Assert ($a.code -eq 0 -and $a.text -match 'Redacted:' -and $a.redact -eq $true) "answering y to the question turns -Redact on (exit $($a.code), manifest redact $($a.redact))"
+    $a = Invoke-Asked "`n"
+    Assert ($a.code -eq 0 -and $a.redact -eq $false -and -not ($a.text -match 'Redacted:')) "Enter at the question leaves -Redact off (exit $($a.code), manifest redact $($a.redact))"
 
     # ---------------- 6: the launcher passes the exit code on
     Write-Host ''

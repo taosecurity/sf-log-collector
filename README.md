@@ -21,7 +21,7 @@ to the default one on your PC:
 ```
 > powershell -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -Note "quest stuck at step 3" -Hours 2 -IncludeSaves
 
-Starfield log collector 2.0.1
+Starfield log collector 2.1.0
 
 Collecting files changed last 2 hours (2026-11-20 13:36)
   ! Crash log found! (1 new log(s) in SFSE\Crashlogs)
@@ -57,8 +57,26 @@ screenshots\a.png
 ```
 
 `manifest.json` and `collector-log.txt` describe the run and aren't counted in the 12 files. When you double-click
-the `.cmd` file instead, it asks what you tested and whether to add saves, and it waits for a key press at the end
-so you can read the result.
+the `.cmd` file instead, it asks what you tested, whether to add saves, and whether to hide your Windows user name
+(see [Hide your user name](#hide-your-user-name--redact)), and it waits for a key press at the end so you can read
+the result.
+
+The same kind of run with `-Redact` adds one line to the summary, and the copied logs show placeholders instead of
+your user folder and computer name:
+
+```
+> powershell -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -Note "quest stuck at step 3" -Hours 2 -Redact
+...
+  Contents: papyrus 1, gameIni 1, sfseLogs 1, crashLogger 1, pluginsTxt 1
+  Redacted: 2 file(s) changed; saves and screenshots left as they are
+...
+
+docs\SFSE\Logs\sfse.txt in the zip:
+config path = %USERPROFILE%\Documents\My Games\Starfield\SFSE\sfse.ini
+
+docs\SFSE\Crashlogs\crash-2026-11-24.log in the zip:
+Computer: <computer>
+```
 
 What it does and doesn't do:
 
@@ -74,11 +92,12 @@ This tool was built with [Claude Code](https://claude.com/claude-code).
 
 ## Quick start
 
-1. Download `sf-log-collector-2.0.1.zip` from the
+1. Download `sf-log-collector-2.1.0.zip` from the
    [releases page](https://github.com/taosecurity/sf-log-collector/releases) and unzip it anywhere.
 2. Play until the problem happens, then **quit Starfield**.
 3. Double-click **`Collect-StarfieldTestLogs.cmd`**. Type a few words about what you were doing (or press Enter),
-   and answer the question about saves (press Enter for none).
+   answer the question about saves (press Enter for none), and the question about hiding your Windows user name,
+   computer name and user folder (`y` to hide them, Enter to leave the files as they are).
 4. The zip is in **`Documents\StarfieldLogs`**, named `StarfieldLogs-<date>-<time>-<your words>.zip`. Attach it
    to your bug report.
 
@@ -152,6 +171,47 @@ Report files over 50 MB are skipped unless you add `-IncludeLarge`. Saves are ne
 saves (`Save<N>_...`; autosaves, quicksaves and exit saves are ignored) of the character in your newest manual
 save, stored as `before-...` and `after-...`. Make one hard save before you test and one after.
 
+## Hide your user name (-Redact)
+
+Logs often contain your Windows user name, your computer name and the path of your user folder, for example
+`C:\Users\<your name>\Documents\My Games\Starfield`. If you send the zip to a mod author, post it in public or hand
+it to an AI assistant, add `-Redact` (or answer `y` to the question when you double-click):
+
+```
+powershell -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -Redact
+powershell -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -Redact -SavePair
+```
+
+In every text file it copies (logs, `plugins.txt`, INIs, crash logs, SFSE reports, Vortex exports, console
+transcripts) and in its own `manifest.json`, `collector-log.txt` and `events.txt`, the collector then replaces:
+
+| What | Becomes |
+|---|---|
+| your user folder (`C:\Users\<name>`, also written with `/`, with `\\` as in JSON, or in the short `C:\Users\NAME~1` form) | `%USERPROFILE%` |
+| your Windows user name, as a whole word | `<user>` |
+| your computer name, as a whole word | `<computer>` |
+| your Steam account number in `userdata\<number>` | `userdata\<steam-id>` |
+
+Only the copies in the zip change; your own files are never touched. Plugin names, form IDs, mod, quest and script
+names stay as they are, because they are what a mod author needs. The summary's `Redacted:` line says how many files
+were changed, and `collector-log.txt` lists each one with the number of replacements (never the values).
+
+What `-Redact` does not hide:
+
+- **Saves.** They are copied as they are, also with `-SavePair` or `-IncludeSaves`. A save holds your character's
+  name, and its file name holds that name in hex. Leave saves out if that matters to you.
+- **Screenshots**, and any copied file that doesn't look like text.
+- **File names.** The names of the files inside the zip are not changed, and the zip's own name is built from the
+  note you typed.
+- **Short names.** A user name under 3 letters is hidden only in `\Users\<name>` paths, so a name such as `ui`
+  doesn't turn every "UI" in a log into `<user>`; a computer name under 3 letters is not replaced. A longer name
+  that is also an ordinary word (such as `Player`) is replaced wherever that word appears.
+- **Some old text files.** In a file saved in an older Windows text encoding rather than UTF-8 or UTF-16, a name
+  with letters outside English may not be found. Everything else in such a file is kept byte for byte.
+
+If a text file can't be redacted (it can't be read, or it isn't valid text in its encoding), it is left out of the
+zip with a warning rather than sent unredacted. Without `-Redact`, every file is copied byte for byte, as in earlier versions.
+
 ## Your setup
 
 | Setup | What to do |
@@ -183,7 +243,8 @@ save, stored as `before-...` and `after-...`. Make one hard save before you test
 | `-OutDir <dir>` | where the zip goes (default `Documents\StarfieldLogs`) |
 | `-LogFile <file>` (short form `-Log <file>`) | also write the troubleshooting log to this file (added to the end if it exists) |
 | `-Verbose` | show the troubleshooting log on screen as it runs (PowerShell's own switch; lines start with `VERBOSE:`) |
-| `-NoPrompt` | ask nothing (for scripts) |
+| `-Redact` | hide your user folder, user name, computer name and Steam account number in the copied text files (asked for if not given; see [Hide your user name](#hide-your-user-name--redact)) |
+| `-NoPrompt` | ask nothing (for scripts); without `-Redact` that means no redaction |
 | `-DryRun` | build the zip but don't move the "last run" marker, so the next run covers the same window |
 
 The "last run" marker is `Documents\StarfieldLogs\.last-run-<Windows user>` (in `-OutDir`). Delete it to start
@@ -212,6 +273,7 @@ your Windows user folder.
 | `No ModOrganizer.ini in -MO2Path` | pass the instance folder (MO2: Settings > Paths shows it) |
 | `Could not copy <file>` | another program holds it, or you're running as another Windows user: run it as the user who plays |
 | `Crash log found!` | nothing to fix here: the crash log is in the zip |
+| `Left out <file> because it could not be redacted` | with `-Redact`, that file couldn't be read as text; send it by hand after looking inside, or run without `-Redact` |
 
 Exit codes:
 
@@ -227,6 +289,9 @@ Exit codes:
 3. `appdata\plugins.txt` (or `mo2\profile\plugins.txt`) is the load order; `listing.dataPlugins` in the manifest
    shows which plugin files were in Data.
 4. A crash log is in `docs\SFSE\Crashlogs` or `game\Data\SFSE\Plugins`.
+5. If `manifest.json` has `"redact": true`, the player used `-Redact`: `%USERPROFILE%`, `<user>`, `<computer>` and
+   `<steam-id>` are placeholders. Each changed file has `"redacted": true`; its `size` and `sha256` describe the copy
+   in the zip, and `sourceSize` is the original's size.
 
 [papyrus-log-check](https://github.com/taosecurity/papyrus-log-check) summarizes a Papyrus log's errors.
 
@@ -234,8 +299,10 @@ Exit codes:
 
 The zip holds your logs, settings and load order, and saves if you ask. The collector writes `%USERPROFILE%` in
 place of your Windows user folder in the manifest, the log and `events.txt`, and leaves out your computer and
-user names. The logs themselves are copied as they are, and some of them (crash logs, SFSE logs) contain your
-folder paths. Look inside before you post a zip in public. Details: [PRIVACY.md](PRIVACY.md).
+user names. Without `-Redact` the logs themselves are copied as they are, and some of them (crash logs, SFSE logs)
+contain your folder paths. With `-Redact` those are hidden too, except in saves, screenshots and file names (see
+[Hide your user name](#hide-your-user-name--redact)). Look inside before you post a zip in public. Details:
+[PRIVACY.md](PRIVACY.md).
 
 ## Tests
 

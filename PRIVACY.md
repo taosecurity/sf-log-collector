@@ -42,9 +42,25 @@ anywhere. The zip it makes stays on your PC until you send it to someone.
 
 Your logs, INIs, load order, mod settings, the screenshots from the window, and saves if you asked. In its own
 files (`manifest.json`, `collector-log.txt`, `events.txt`) the collector writes `%USERPROFILE%` in place of your
-Windows user folder and leaves out your computer and user names. The copied logs are not changed, and some of
-them (crash logs, SFSE logs, the Papyrus log) contain folder paths with your Windows user name. Saves contain your
-character's name. Look inside before you post a zip in public.
+Windows user folder and leaves out your computer and user names.
+
+Without `-Redact`, the copied logs are not changed, and some of them (crash logs, SFSE logs, the Papyrus log)
+contain folder paths with your Windows user name, and sometimes your computer name.
+
+With `-Redact` (or `y` at the double-click question), the collector also changes the copies of every text file it
+puts in the zip (logs, `plugins.txt`, INIs, crash logs, Vortex exports) and its own files: your Windows user folder
+becomes `%USERPROFILE%`, your Windows user name `<user>`, your computer name `<computer>`, and your Steam account
+number in `userdata\<number>` becomes `userdata\<steam-id>`. Your original files are never changed. Plugin names,
+form IDs, mod names and script names stay as they are, because a mod author needs them. These are not changed even
+with `-Redact`:
+
+- saves (they contain your character's name, which is also in the save's file name in hex);
+- screenshots, and any copied file that doesn't look like text;
+- the names of the files inside the zip, and the zip's own name, which includes the note you typed;
+- a user name under 3 letters outside `\Users\<name>` paths (so a name such as "ui" doesn't replace every "UI" in a
+  log), and a name inside a file in an older Windows text encoding when the name has letters outside English.
+
+Look inside before you post a zip in public.
 
 ## Downloading it
 

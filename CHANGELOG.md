@@ -1,5 +1,48 @@
 # Changelog
 
+## 2.1.0 (not released yet)
+
+### What's new
+
+The new `-Redact` option hides your Windows user name, your computer name, your user folder and your Steam account number in the files the collector copies, so you can send the zip to a mod author or hand it to an AI assistant without them. When you double-click the `.cmd` file, it asks one new question about it, and pressing Enter leaves it off. Without `-Redact`, the collector copies every file exactly as 2.0.1 did.
+
+### Example
+
+This is a real run on a made-up test setup (the options that point at the test setup's folders are left out, and the paths are shortened):
+
+    > powershell -ExecutionPolicy Bypass -File .\Collect-StarfieldTestLogs.ps1 -Note "quest stuck at step 3" -Hours 2 -NoPrompt -Redact
+
+    Starfield log collector 2.1.0
+
+    Collecting files changed last 2 hours (2026-11-24 10:53)
+      ! Crash log found! (1 new log(s) in SFSE\Crashlogs)
+
+    Done.
+      Package : C:\Users\<you>\Documents\StarfieldLogs\StarfieldLogs-20261124-125335-quest-stuck-at-step-3.zip
+      Size    : 0.0 MB, 5 files
+      Contents: papyrus 1, gameIni 1, sfseLogs 1, crashLogger 1, pluginsTxt 1
+      Redacted: 2 file(s) changed; saves and screenshots left as they are
+
+    Warnings:
+      - Crash log found! (1 new log(s) in SFSE\Crashlogs)
+
+    Send this zip to whoever asked for your logs. Look inside first if you share it in public.
+
+In the zip, the SFSE log's `config path = C:\Users\<you>\Documents\My Games\Starfield\SFSE\sfse.ini` line reads `config path = %USERPROFILE%\Documents\My Games\Starfield\SFSE\sfse.ini`, and the crash log's `Computer:` line reads `Computer: <computer>`.
+
+### Changes
+
+- New `-Redact` switch. In every copied text file (logs, `plugins.txt`, INIs, crash logs, SFSE reports, Vortex exports, console transcripts) and in the collector's own files, it replaces your user folder with `%USERPROFILE%` (in the `\`, `/`, JSON `\\` and short 8.3 forms), your Windows user name with `<user>`, your computer name with `<computer>`, and `userdata\<number>` with `userdata\<steam-id>`. Plugin names, form IDs and mod names are not touched.
+- Saves, screenshots, files that don't look like text, and file names are left as they are, and the README, PRIVACY.md and the help text say so. A user name under 3 letters is hidden only in `\Users\<name>` paths.
+- A text file that can't be redacted is left out of the zip with a warning, so it is never sent unredacted.
+- The double-click run asks `Hide your Windows user name, computer name and user folder in the copied files? [y/N]`. With `-NoPrompt` and no `-Redact`, nothing is redacted.
+- `manifest.json` has a new top-level `redact` field. A file that redaction changed has `"redacted": true`, `size` and `sha256` for the copy in the zip, and `sourceSize` for the original.
+- The test script has new checks for `-Redact` and now reports a collector that fails to start as a failed check instead of stopping.
+
+### Fixes
+
+- `Get-Help .\Collect-StarfieldTestLogs.ps1 -Detailed` shows the help text and every option again. In 2.0.0 and 2.0.1 the license lines directly above the help text kept PowerShell from finding it, so `Get-Help` showed only the list of option names.
+
 ## 2.0.1 (2026-11-20)
 
 ### What's new
