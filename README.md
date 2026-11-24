@@ -202,7 +202,7 @@ What `-Redact` does not hide:
 - **Saves.** They are copied as they are, also with `-SavePair` or `-IncludeSaves`. A save holds your character's
   name, and its file name holds that name in hex. Leave saves out if that matters to you.
 - **Screenshots**, and any copied file that doesn't look like text (a zero byte in its first 64 KB). Files named
-  `.log`, `.txt`, `.ini`, `.json` or `.toml` are always treated as text, so a log cut off by a crash, which can end in
+  `.log`, `.txt`, `.ini`, `.json`, `.toml`, `.xml`, `.csv`, `.cfg`, `.yaml` or `.yml` are always treated as text, so a log cut off by a crash, which can end in
   zero bytes, is still redacted.
 - **File names.** The names of the files inside the zip are not changed, and the zip's own name is built from the
   note you typed.

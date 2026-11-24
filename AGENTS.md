@@ -38,7 +38,7 @@ The bundled test builds a fake Starfield setup in the temp folder and needs no g
 
     powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Collector.ps1
 
-It ends with `<N> passed, 0 failed` and exit code 0 (N is 197 on 2.1.0, a little lower if a test prints `skip`;
+It ends with `<N> passed, 0 failed` and exit code 0 (N is 200 on 2.1.0, a little lower if a test prints `skip`;
 what matters is `0 failed`). The test works in a new `%TEMP%\sflc-test-<random>` folder and deletes it at the end;
 it writes nothing else. On a player's PC, a dry run is the quick check (it writes a zip but doesn't move the
 "last run" marker):

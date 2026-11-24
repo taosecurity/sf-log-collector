@@ -168,17 +168,22 @@ function Add-RedactRuleSet([System.Collections.ArrayList]$Into, [scriptblock]$Fo
         $leaf = Split-Path $env:USERPROFILE.TrimEnd('\') -Leaf
         if ($leaf -and -not ($userNames -contains $leaf)) { $userNames += $leaf }
     }
-    # Longest first: a profile folder named <user>-something is replaced whole, not as <user>-something.
-    foreach ($u in @($userNames | Sort-Object Length -Descending)) {
-        if ($u.Length -ge 3) { Add-RedactRule ('(?<!\w)' + [regex]::Escape((& $Form $u)) + '(?!\w)') '<user>' }
+    # Longest first across user and computer names: a profile folder named <user>-something, or a
+    # computer named <user>-PC, is replaced whole, not as <user>-something.
+    $words = @()
+    foreach ($u in $userNames) {
+        if ($u.Length -ge 3) { $words += , @($u, '<user>') }
         else {
             Add-RedactRule ('(?<=[\\/]{1,2}Users[\\/]{1,2})' + [regex]::Escape((& $Form $u)) + '(?!\.?[\w~-])') '<user>'
             if ($Notes) { [void]$script:RedactNotes.Add('redact: the user name is under 3 characters, so it is hidden only in \Users\<name> paths') }
         }
     }
     if ($env:COMPUTERNAME) {
-        if ($env:COMPUTERNAME.Length -ge 3) { Add-RedactRule ('(?<!\w)' + [regex]::Escape((& $Form $env:COMPUTERNAME)) + '(?!\w)') '<computer>' }
+        if ($env:COMPUTERNAME.Length -ge 3) { $words += , @($env:COMPUTERNAME, '<computer>') }
         elseif ($Notes) { [void]$script:RedactNotes.Add('redact: the computer name is under 3 characters, so it is not replaced') }
+    }
+    foreach ($w in @($words | Sort-Object { $_[0].Length } -Descending)) {
+        Add-RedactRule ('(?<!\w)' + [regex]::Escape((& $Form $w[0])) + '(?!\w)') $w[1]
     }
     Add-RedactRule '(?<=(?<!\w)userdata[\\/]{1,2})\d+(?!\w)' '<steam-id>'
 }
@@ -309,7 +314,10 @@ function Invoke-RedactFile([string]$Path) {
         }
         if ($hits -gt 0) { [System.IO.File]::Copy($tmp, $Path, $true) }
     } finally {
-        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force }
+        # A temp file that can't be removed now (antivirus, say) must not lose the good copy; the zip
+        # step removes any left over.
+        try { if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction Stop } }
+        catch { Write-Log "redact: could not remove a temp file yet: $($_.Exception.Message)" }
     }
     return $hits
 }
@@ -402,6 +410,13 @@ function Copy-ToPackage {
         return $true
     } catch {
         if ($redactStop) { throw }
+        if ($Redact -and (Test-Path -LiteralPath $target)) {
+            # A copy cut off partway was never redacted: it must not reach the zip.
+            try { Remove-Item -LiteralPath $target -Force -ErrorAction Stop } catch { }
+            if (Test-Path -LiteralPath $target) {
+                throw "Stopped: copying $($File.FullName) failed, and its unredacted partial copy in the staging folder could not be removed. Close the program holding it (often antivirus) and run the collector again."
+            }
+        }
         Add-Warning "Could not copy $($File.FullName): $($_.Exception.Message) (close the program that has it open, or run as the Windows user who plays)"
         return $false
     }
@@ -1124,6 +1139,10 @@ try {
             Where-Object { $_.Extension -match '^\.(esm|esp|esl)$' } |
             ForEach-Object { [ordered]@{ name = $_.Name; size = $_.Length; modified = $_.LastWriteTime.ToString('s') } })
     }
+    if ($Redact) {
+        # Same rules as the copied files: a plugin or DLL named after the user is <user>.esm here too.
+        foreach ($item in @($listing.sfsePluginDlls) + @($listing.dataPlugins)) { $item.name = Hide-Path $item.name }
+    }
     if ($mo2) { $listing.note = 'With Mod Organizer 2 the mods stay in MO2''s mods folder: see mo2\profile\modlist.txt for the mod list.' }
 
     $manifest = [ordered]@{
@@ -1155,6 +1174,13 @@ try {
     Write-Log "zip: $ZipPath"
     [System.IO.File]::WriteAllLines((Join-Path $script:Stage 'collector-log.txt'), [string[]]$script:LogLines, $utf8)
     if (Test-Path -LiteralPath $ZipPath) { Remove-Item -LiteralPath $ZipPath -Force }
+    if ($Redact) {
+        # Temp files -Redact couldn't remove at the time are not part of the package.
+        foreach ($t in @(Get-ChildItem -LiteralPath $script:Stage -Filter '*.redact-tmp' -File -Recurse -ErrorAction SilentlyContinue)) {
+            try { Remove-Item -LiteralPath $t.FullName -Force -ErrorAction Stop }
+            catch { throw "Stopped: a temp file in the staging folder could not be removed ($($_.Exception.Message)). Close the program holding it (often antivirus) and run the collector again." }
+        }
+    }
     [System.IO.Compression.ZipFile]::CreateFromDirectory($script:Stage, $ZipPath, [System.IO.Compression.CompressionLevel]::Optimal, $false)
 
     if (-not $DryRun) {

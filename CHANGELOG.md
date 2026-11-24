@@ -34,8 +34,9 @@ In the zip, the SFSE log's `config path = C:\Users\<you>\Documents\My Games\Star
 
 - New `-Redact` switch. In every copied text file (logs, `plugins.txt`, INIs, crash logs, SFSE reports, Vortex exports, console transcripts) and in the collector's own files, it replaces your user folder with `%USERPROFILE%` (in the `\`, `/`, JSON `\\` and short 8.3 forms), your Windows user name with `<user>`, your computer name with `<computer>`, and `userdata\<number>` with `userdata\<steam-id>`. Plugin names, form IDs and mod names are not touched, unless one of them is your user name or computer name as a whole word.
 - Saves, screenshots, files that don't look like text, and file names are left as they are, and the README, PRIVACY.md and the help text say so. A user name under 3 letters is hidden only in `\Users\<name>` paths.
-- A text file that can't be redacted is left out of the zip with a warning, so it is never sent unredacted.
-- Files named `.log`, `.txt`, `.ini`, `.json` or `.toml` are always redacted as text, so a log that a crash cut off with zero bytes at its end, or a UTF-16 file without a byte-order mark, is not passed over as binary.
+- A text file that can't be redacted, or whose copy fails partway, is left out of the zip with a warning, so it is never sent unredacted. If its unredacted copy can't be removed from the staging folder, the run stops without making a zip.
+- The plugin and DLL names in the manifest's `listing` follow the same rules, so a plugin named after you is `<user>.esm` there too.
+- Files named `.log`, `.txt`, `.ini`, `.json`, `.toml`, `.xml`, `.csv`, `.cfg`, `.yaml` or `.yml` are always redacted as text, so a log that a crash cut off with zero bytes at its end, or a UTF-16 file without a byte-order mark, is not passed over as binary.
 - The double-click run asks `Hide your Windows user name, computer name and user folder in the copied files? [y/N]`. With `-NoPrompt` and no `-Redact`, nothing is redacted.
 - `manifest.json` has a new top-level `redact` field. A file that redaction changed has `"redacted": true`, `size` and `sha256` for the copy in the zip, and `sourceSize` for the original.
 - The test script has new checks for `-Redact` and now reports a collector that fails to start as a failed check instead of stopping.

@@ -647,6 +647,30 @@ try {
     $want8e = [byte[]]([System.Text.Encoding]::ASCII.GetBytes("file %USERPROFILE%\x.txt by <user>`r`n") + $nTail)
     Assert ($p8e -and [System.BitConverter]::ToString($p8e) -eq [System.BitConverter]::ToString($want8e)) 'a UTF-8 name with a letter outside English is hidden in a file that is not valid UTF-8, and the bad byte is kept'
 
+    # 8f: a computer name that holds the user name is <computer> whole; a plugin named after the user is
+    # <user>.esm in the manifest's listing too
+    $mUser = 'Zqxmike'
+    $mProf = Join-Path $Root "M\Users\$mUser"
+    [void](New-Item -ItemType Directory -Path $mProf -Force)
+    New-File 'M\MyGames\StarfieldCustom.ini' "[Papyrus]`r`nbEnableLogging=1`r`n" | Out-Null
+    New-File 'M\MyGames\Logs\Script\Papyrus.0.log' "Computer: ZQXMIKE-PC`r`n" | Out-Null
+    New-File 'M\Game\Starfield.exe' 'not a real exe' | Out-Null
+    New-File "M\Game\Data\$mUser.esm" 'plugin' | Out-Null
+    $out8f = Join-Path $Root 'out8f'
+    $r = Invoke-WithEnv @{ USERPROFILE = $mProf; USERNAME = $mUser; COMPUTERNAME = 'ZQXMIKE-PC' } {
+        Invoke-Collector @('-NoPrompt', '-Hours', '2', '-MyGamesDir', (Join-Path $Root 'M\MyGames'), '-PluginsTxtDir', (Join-Path $Root 'M\none'),
+            '-DownloadsDir', (Join-Path $Root 'M\none'), '-ScreenshotDir', (Join-Path $Root 'M\none'), '-GamePath', (Join-Path $Root 'M\Game'),
+            '-Redact', '-DryRun', '-OutDir', $out8f) }
+    Assert ($r.code -eq 0) "user-in-computer-name run exit code 0 (got $($r.code))"
+    $p8f = ''; $dp8f = @()
+    if (@(Get-ChildItem -LiteralPath $out8f -Filter '*.zip' -ErrorAction SilentlyContinue).Count -gt 0) {
+        $z8f = Open-Zip $out8f
+        $p8f = [System.IO.File]::ReadAllText((Join-Path $z8f.dir 'docs\Logs\Script\Papyrus.0.log'))
+        $dp8f = @($z8f.manifest.listing.dataPlugins | ForEach-Object { $_.name })
+    }
+    Assert ($p8f -eq "Computer: <computer>`r`n") "a computer name holding the user name becomes <computer> ($($p8f.Trim()))"
+    Assert ($dp8f -contains '<user>.esm' -and -not ($dp8f -contains "$mUser.esm")) "manifest listing hides a plugin named after the user ($($dp8f -join ', '))"
+
     # 8d: double-click: the new question turns -Redact on with y and stays off with Enter
     $out8d = Join-Path $Root 'out8d'
     $ask = @('-Hours', '2', '-MyGamesDir', (Join-Path $Root 'S\MyGames'), '-PluginsTxtDir', (Join-Path $Root 'S\none'),
